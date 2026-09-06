@@ -534,7 +534,14 @@ def generate_outputs(alive_results, total_checked, duration_sec):
     log("Written sub_base64.txt")
 
     # 3. Update README.md
+    update_readme(alive_results, total_checked, duration_sec)
+
+
+def update_readme(alive_results, total_checked, duration_sec):
+    """Updates README.md stats and server table, or creates it if missing."""
+    utc_now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     avg_ping = int(sum(p for _, p in alive_results) / len(alive_results)) if alive_results else 0
+
     top_table_rows = []
     for idx, (node, ping_ms) in enumerate(alive_results[:25], start=1):
         rem = urllib.parse.unquote(node.get("remark", ""))[:35]
@@ -542,6 +549,37 @@ def generate_outputs(alive_results, total_checked, duration_sec):
 
     top_table_md = "\n".join(top_table_rows) if top_table_rows else "| - | - | Нет доступных серверов | - | ❌ |"
 
+    stats_block = (
+        "<!-- STATS_START -->\n"
+        "### 📊 Статус последнего обновления:\n"
+        f"- **Последняя проверка:** `{utc_now}`\n"
+        f"- **Рабочих серверов:** **`{len(alive_results)}`** из `{total_checked}` проверенных\n"
+        f"- **Средний пинг к Google:** `{avg_ping} ms`\n"
+        f"- **Время проверки всех серверов:** `{duration_sec:.1f} сек`\n"
+        "- **Интервал автоматического обновления:** каждые 30 минут\n\n"
+        "## ⚡ Топ самых быстрых серверов (на момент последней проверки):\n\n"
+        "| # | Адрес:Порт | Исходное имя | Пинг к Google | Статус |\n"
+        "|---|------------|--------------|---------------|--------|\n"
+        f"{top_table_md}\n"
+        "<!-- STATS_END -->"
+    )
+
+    if os.path.exists("README.md"):
+        try:
+            with open("README.md", "r", encoding="utf-8") as f:
+                content = f.read()
+
+            if "<!-- STATS_START -->" in content and "<!-- STATS_END -->" in content:
+                pattern = r"<!-- STATS_START -->.*?<!-- STATS_END -->"
+                new_content = re.sub(pattern, stats_block, content, flags=re.DOTALL)
+                with open("README.md", "w", encoding="utf-8") as f:
+                    f.write(new_content)
+                log("Updated README.md stats block")
+                return
+        except Exception as e:
+            log(f"Warning: Failed to update README.md stats: {e}")
+
+    # Fallback if tags not found or README.md does not exist
     gh_repo = os.environ.get("GITHUB_REPOSITORY", "levkrasnik43-alt/nashi-belye")
     if "/" in gh_repo:
         gh_user, gh_name = gh_repo.split("/", 1)
@@ -552,34 +590,62 @@ def generate_outputs(alive_results, total_checked, duration_sec):
     raw_url = f"https://raw.githubusercontent.com/{gh_user}/{gh_name}/main/sub.txt"
     b64_url = f"https://raw.githubusercontent.com/{gh_user}/{gh_name}/main/sub_base64.txt"
 
-    readme_content = f"""# 🛡️ VPN Подписка «{SUB_TITLE}»
+    fallback = (
+        f"# 🛡️ VPN Подписка «{SUB_TITLE}»\n\n"
+        f"Автоматически обновляемый агрегатор и чекер VPN-конфигураций из белых списков РФ.\n\n"
+        f"{stats_block}\n\n"
+        f"## 🔗 Ссылки на подписку для ваших приложений\n\n"
+        f"| Тип ссылки | Ссылка |\n"
+        f"|---|---|\n"
+        f"| **GitHub Pages** | `{pages_url}` |\n"
+        f"| **GitHub Raw** | `{raw_url}` |\n"
+        f"| **Base64 формат** | `{b64_url}` |\n"
+    )
+    with open("README.md", "w", encoding="utf-8") as f:
+        f.write(fallback)
+    log("Written fallback README.md")
 
-Автоматически обновляемый агрегатор и чекер VPN-конфигураций из белых списков РФ.
 
-Программа каждые 30 минут собирает сервера из нескольких проверенных источников, тестирует каждый сервер на доступность к **Google** (`http://www.google.com/generate_204`), отсеивает неработающие и формирует готовую подписку с названием **«{SUB_TITLE}»**.
+def main():
+    start_time = time.time()
+    log(f"=== Starting '{SUB_TITLE}' VPN Checker ===")
+    
+    xray_bin = find_or_download_xray()
+    
+    raw_nodes = fetch_subscriptions()
+    if not raw_nodes:
+        log("No nodes fetched from sources. Exiting.")
+        return
 
----
+    # Parse nodes
+    valid_nodes = []
+    for link in raw_nodes:
+        parsed = parse_proxy_link(link)
+        if parsed:
+            valid_nodes.append(parsed)
 
-### 📊 Статус последнего обновления:
-- **Последняя проверка:** `{utc_now}`
-- **Рабочих серверов:** **`{len(formatted_links)}`** из `{total_checked}` проверенных
-- **Средний пинг к Google:** `{avg_ping} ms`
-- **Время проверки всех серверов:** `{duration_sec:.1f} сек`
-- **Интервал автоматического обновления:** каждые 30 минут
+    log(f"Parsed {len(valid_nodes)} valid configurations for testing.")
 
----
+    # Process in batches
+    alive_nodes = []
+    total = len(valid_nodes)
+    batches = [valid_nodes[i:i + BATCH_SIZE] for i in range(0, total, BATCH_SIZE)]
 
-## 🔗 Ссылки на подписку для ваших приложений
+    log(f"Split into {len(batches)} batches (batch size: {BATCH_SIZE}). Testing Google connectivity...")
 
-Вставьте в ваш VPN-клиент любую из этих ссылок:
+    for b_idx, batch in enumerate(batches, start=1):
+        tmp_cfg = f"tmp_cfg_{b_idx}_{int(time.time())}.json"
+        b_start = time.time()
+        res = check_batch_slice(batch, xray_bin, tmp_cfg)
+        b_dur = time.time() - b_start
+        alive_nodes.extend(res)
+        log(f"Batch {b_idx}/{len(batches)} finished in {b_dur:.1f}s: {len(res)}/{len(batch)} alive. Total alive so far: {len(alive_nodes)}")
 
-| Тип ссылки | Ссылка | Для каких клиентов |
-|------------|--------|---------------------|
-| **GitHub Pages** *(самая быстрая в РФ)* | `{pages_url}` | v2rayNG, Hiddify, v2rayN, Sing-box, NekoBox, Happ |
-| **GitHub Raw (Текст)** | `{raw_url}` | v2rayNG, Hiddify, v2rayN, FoXray, Streisand |
-| **Base64 формат** | `{b64_url}` | Shadowrocket, старые версии клиентов |
+    total_duration = time.time() - start_time
+    log(f"=== Check complete in {total_duration:.1f}s! Alive: {len(alive_nodes)}/{len(valid_nodes)} ===")
 
-### Прямые ссылки для удобного копирования:
-- **GitHub Pages:**
-  ```text
-  {pages_url}
+    generate_outputs(alive_nodes, len(valid_nodes), total_duration)
+
+
+if __name__ == "__main__":
+    main()
