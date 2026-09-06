@@ -478,7 +478,7 @@ def check_batch_slice(nodes, xray_bin, config_path):
 
 
 def format_node_remark(node, ping_ms, index):
-    """Creates a clean, unified name for the node."""
+    """Creates a clean, numbered name for the node to keep best servers on top."""
     orig_remark = node.get("remark", "").strip()
 
     # Clean out unwanted spam/tg tags
@@ -488,9 +488,9 @@ def format_node_remark(node, ping_ms, index):
     clean = re.sub(r'[\s|┃—-]+', ' ', clean).strip()
 
     if not clean:
-        clean = f"Сервер #{index}"
+        clean = f"Сервер"
 
-    new_remark = f"[{SUB_TITLE}] {clean} ({ping_ms}ms)"
+    new_remark = f"[{SUB_TITLE}] #{index:02d} | {clean} ({ping_ms}ms)"
     encoded_fragment = urllib.parse.quote(new_remark)
 
     orig_url = node["original_url"]
@@ -500,7 +500,8 @@ def format_node_remark(node, ping_ms, index):
 
 def generate_outputs(alive_results, total_checked, duration_sec):
     """Writes sub.txt, sub_base64.txt, and updates README.md."""
-    alive_results.sort(key=lambda x: x[1])
+    # Sort strictly by ping (lowest latency = best server at the top)
+    alive_results.sort(key=lambda x: (x[1] if x[1] is not None else 99999, x[0].get('host', '')))
 
     formatted_links = []
     for idx, (node, ping_ms) in enumerate(alive_results, start=1):
@@ -556,7 +557,7 @@ def update_readme(alive_results, total_checked, duration_sec):
         f"- **Рабочих серверов:** **`{len(alive_results)}`** из `{total_checked}` проверенных\n"
         f"- **Средний пинг к Google:** `{avg_ping} ms`\n"
         f"- **Время проверки всех серверов:** `{duration_sec:.1f} сек`\n"
-        "- **Интервал автоматического обновления:** каждые 30 минут\n\n"
+        "- **Интервал автоматического обновления:** каждые 10 минут\n\n"
         "## ⚡ Топ самых быстрых серверов (на момент последней проверки):\n\n"
         "| # | Адрес:Порт | Исходное имя | Пинг к Google | Статус |\n"
         "|---|------------|--------------|---------------|--------|\n"
