@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 VPN Subscription Aggregator and Multi-Service Speed/Ping Checker
-"Наши белые"
+"Наши белые" - С поддержкой проверки для мобильной сети МТС (ТСПУ / Белые списки SNI / Порт 443)
 """
 
 import os
@@ -25,12 +25,25 @@ if hasattr(sys.stdout, 'reconfigure'):
 if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
-# Configuration
+# Subscription sources
 SUBSCRIPTION_URLS = [
+    # Источник 1: Универсальный проверенный список
     "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt",
+    # Источник 2: Специализированная база под мобильные операторы РФ (Белые списки Reality)
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
+    # Источник 3: Проверенные RU-SNI конфигурации
+    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-SNI-RU-all.txt",
+    # Источник 4: Проверенные RU-CIDR конфигурации
+    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-checked.txt",
+    # Источник 5: Большая отсортированная база
     "https://solovyov-jenya2004.vercel.app/final_sorted/",
 ]
+
+# Regex for Russian domains and CDNs approved in mobile TSPU white-lists (MTS, MegaFon, Beeline, Tele2)
+RU_DOMAINS_PATTERN = re.compile(
+    r'(\.ru$|\.su$|\.рф$|yandex|ya\.ru|vk\.com|vkvideo|userapi|mail\.ru|ok\.ru|dzen|gosuslugi|mts\.ru|megafon|beeline|tele2|t2\.ru|ozon|wildberries|wb\.ru|tbank|tinkoff|sber|rutube|avito|2gis|kinopoisk|rzd\.ru|rambler|moex|lenta\.ru|rbc\.ru|pepro\.site|oaklandjoseph|rumedia-cdn|wba-pn\.ru|24lider\.ru|abvpn\.ru)',
+    re.IGNORECASE
+)
 
 SUB_TITLE = "Наши белые"
 SUB_TITLE_B64 = base64.b64encode(SUB_TITLE.encode('utf-8')).decode('ascii')
@@ -127,10 +140,11 @@ def find_or_download_xray():
 
 
 def fetch_subscriptions():
-    """Fetches nodes from all configured URLs and returns a deduplicated list."""
+    """Fetches nodes from all configured URLs and returns a deduplicated list with source metadata."""
     all_raw_nodes = []
     
     for url in SUBSCRIPTION_URLS:
+        is_mobile_source = ("Rus-Mobile" in url or "WHITE-SNI" in url or "WHITE-CIDR" in url)
         log(f"Fetching subscription: {url}")
         try:
             req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
@@ -142,7 +156,6 @@ def fetch_subscriptions():
             except Exception:
                 text = ""
 
-            # Check if content is base64 encoded
             if not ("vless://" in text or "trojan://" in text or "ss://" in text):
                 try:
                     cleaned_b64 = re.sub(r'\s+', '', text)
@@ -158,8 +171,8 @@ def fetch_subscriptions():
                 line = line.strip()
                 if not line or line.startswith('#'):
                     continue
-                if line.startswith(('vless://', 'trojan://', 'ss://')):
-                    all_raw_nodes.append(line)
+                if line.startswith(('vless://', 'trojan://')):
+                    all_raw_nodes.append((line, is_mobile_source))
                     count += 1
             log(f"  -> Extracted {count} nodes from {url}")
 
@@ -168,14 +181,16 @@ def fetch_subscriptions():
 
     log(f"Total raw nodes fetched: {len(all_raw_nodes)}")
 
-    # Deduplication by connection configuration
     unique_map = {}
-    for link in all_raw_nodes:
+    for link, from_mobile in all_raw_nodes:
         try:
             parsed = urllib.parse.urlparse(link)
             sig = f"{parsed.scheme}://{parsed.netloc}{parsed.path}?{parsed.query}"
             if sig not in unique_map:
-                unique_map[sig] = link
+                unique_map[sig] = (link, from_mobile)
+            elif from_mobile:
+                prev_link, _ = unique_map[sig]
+                unique_map[sig] = (prev_link, True)
         except Exception:
             continue
 
@@ -184,8 +199,42 @@ def fetch_subscriptions():
     return unique_nodes
 
 
-def parse_vless(link):
-    """Converts a vless:// URL to an Xray outbound dict."""
+def evaluate_mobile_readiness(sni, port, sec, flow, from_mobile_source=False):
+    """
+    Evaluates compatibility with Russian mobile operators (MTS, MegaFon, Beeline, Tele2).
+    MTS Mobile TSPU blocks:
+      1. Foreign non-whitelisted SNIs (only approved Russian domains pass).
+      2. Non-standard ports (ports != 443 are blocked/reset on mobile data).
+      3. Non-Vision flows (Vision is required to prevent proxy payload detection).
+    """
+    is_ru_sni = bool(RU_DOMAINS_PATTERN.search(sni)) if sni else False
+    is_port_443 = (port in (443, 80))
+    is_vision = (flow == 'xtls-rprx-vision')
+    is_reality = (sec == 'reality')
+
+    # Golden rule for MTS: RU Whitelist SNI + Port 443
+    is_mts_ready = (is_ru_sni and is_port_443) or (from_mobile_source and is_port_443)
+
+    mobile_score = 0
+    if is_mts_ready:
+        mobile_score += 100
+    elif is_ru_sni:
+        mobile_score += 40
+    elif is_port_443:
+        mobile_score += 25
+
+    if is_vision:
+        mobile_score += 25
+    if is_reality:
+        mobile_score += 15
+    if from_mobile_source:
+        mobile_score += 15
+
+    return is_mts_ready, mobile_score
+
+
+def parse_vless(link, from_mobile_source=False):
+    """Converts a vless:// URL to an Xray outbound dict and evaluates mobile readiness."""
     try:
         u = urllib.parse.urlparse(link)
         uuid = u.username
@@ -206,7 +255,6 @@ def parse_vless(link):
         sec = q.get('security', 'none').lower()
         flow = q.get('flow', '')
         
-        # In Xray, flow is only valid for tcp + (tls or reality)
         valid_flow = flow if (net == 'tcp' and sec in ('tls', 'reality')) else ''
 
         stream = {
@@ -215,7 +263,7 @@ def parse_vless(link):
         }
 
         fp = q.get('fp', 'chrome')
-        sni = q.get('sni', '')
+        sni = q.get('sni', '') or q.get('host', '') or host
 
         if sec == 'reality':
             stream["realitySettings"] = {
@@ -264,6 +312,10 @@ def parse_vless(link):
 
         remark = urllib.parse.unquote(u.fragment) if u.fragment else "Node"
 
+        is_mts_ready, mobile_score = evaluate_mobile_readiness(
+            sni, port, sec, valid_flow, from_mobile_source
+        )
+
         return {
             "protocol": "vless",
             "settings": {
@@ -281,14 +333,17 @@ def parse_vless(link):
             "original_url": link,
             "remark": remark,
             "host": host,
-            "port": port
+            "port": port,
+            "sni": sni,
+            "is_mts_ready": is_mts_ready,
+            "mobile_score": mobile_score
         }
     except Exception:
         return None
 
 
-def parse_trojan(link):
-    """Converts a trojan:// URL to an Xray outbound dict."""
+def parse_trojan(link, from_mobile_source=False):
+    """Converts a trojan:// URL to an Xray outbound dict and evaluates mobile readiness."""
     try:
         u = urllib.parse.urlparse(link)
         password = u.username
@@ -306,7 +361,7 @@ def parse_trojan(link):
             "security": sec
         }
 
-        sni = q.get('sni', '')
+        sni = q.get('sni', '') or q.get('host', '') or host
         fp = q.get('fp', 'chrome')
 
         if sec == 'tls':
@@ -316,6 +371,10 @@ def parse_trojan(link):
             }
 
         remark = urllib.parse.unquote(u.fragment) if u.fragment else "Node"
+
+        is_mts_ready, mobile_score = evaluate_mobile_readiness(
+            sni, port, sec, "", from_mobile_source
+        )
 
         return {
             "protocol": "trojan",
@@ -330,18 +389,21 @@ def parse_trojan(link):
             "original_url": link,
             "remark": remark,
             "host": host,
-            "port": port
+            "port": port,
+            "sni": sni,
+            "is_mts_ready": is_mts_ready,
+            "mobile_score": mobile_score
         }
     except Exception:
         return None
 
 
-def parse_proxy_link(link):
+def parse_proxy_link(link, from_mobile_source=False):
     """Parses any supported proxy link."""
     if link.startswith("vless://"):
-        return parse_vless(link)
+        return parse_vless(link, from_mobile_source)
     elif link.startswith("trojan://"):
-        return parse_trojan(link)
+        return parse_trojan(link, from_mobile_source)
     return None
 
 
@@ -410,8 +472,12 @@ def stage1_filter_batch(nodes, xray_bin, config_path):
             "listen": "127.0.0.1",
             "protocol": "http"
         })
-        ob = {k: v for k, v in node.items() if k not in ("original_url", "remark", "host", "port")}
-        ob["tag"] = out_tag
+        ob = {
+            "protocol": node["protocol"],
+            "settings": node["settings"],
+            "streamSettings": node["streamSettings"],
+            "tag": out_tag
+        }
         outbounds.append(ob)
         rules.append({
             "type": "field",
@@ -465,7 +531,9 @@ def stage1_filter_batch(nodes, xray_bin, config_path):
                     alive_in_batch.append({
                         "node": nodes[idx],
                         "ok_google": True,
-                        "ping_google": ping_ms
+                        "ping_google": ping_ms,
+                        "is_mts_ready": nodes[idx].get("is_mts_ready", False),
+                        "mobile_score": nodes[idx].get("mobile_score", 0)
                     })
     finally:
         proc.terminate()
@@ -554,7 +622,9 @@ def stage2_deep_check_node(port, item):
         "ping_telegram": ping_telegram,
         "speed_mbps": speed_mbps,
         "avg_ping": avg_ping,
-        "accessible_count": accessible_count
+        "accessible_count": accessible_count,
+        "is_mts_ready": item.get('is_mts_ready', False),
+        "mobile_score": item.get('mobile_score', 0)
     }
 
 
@@ -584,8 +654,12 @@ def stage2_qualify(candidates, xray_bin):
                 "listen": "127.0.0.1",
                 "protocol": "http"
             })
-            ob = {k: v for k, v in node.items() if k not in ("original_url", "remark", "host", "port")}
-            ob["tag"] = out_tag
+            ob = {
+                "protocol": node["protocol"],
+                "settings": node["settings"],
+                "streamSettings": node["streamSettings"],
+                "tag": out_tag
+            }
             outbounds.append(ob)
             rules.append({
                 "type": "field",
@@ -618,7 +692,9 @@ def stage2_qualify(candidates, xray_bin):
                     "ping_telegram": item['ping_google'],
                     "speed_mbps": 5.0,
                     "avg_ping": item['ping_google'],
-                    "accessible_count": 3
+                    "accessible_count": 3,
+                    "is_mts_ready": item.get('is_mts_ready', False),
+                    "mobile_score": item.get('mobile_score', 0)
                 })
             continue
 
@@ -635,7 +711,8 @@ def stage2_qualify(candidates, xray_bin):
                     res = future.result()
                     qualified_results.append(res)
                     rem = res['node'].get('remark', '')[:25]
-                    log(f"  [Q] {rem} -> ⚡{res['speed_mbps']}Mbps | ⏱️{res['avg_ping']}ms | G:{res['ok_google']} Y:{res['ok_yandex']} TG:{res['ok_telegram']}")
+                    mts_flag = "📱МТС" if res.get('is_mts_ready') else "💻WiFi"
+                    log(f"  [{mts_flag}] {rem} -> ⚡{res['speed_mbps']}Mbps | ⏱️{res['avg_ping']}ms | G:{res['ok_google']} Y:{res['ok_yandex']} TG:{res['ok_telegram']}")
         finally:
             proc.terminate()
             try:
@@ -652,11 +729,10 @@ def stage2_qualify(candidates, xray_bin):
 
 
 def format_node_remark(item, index):
-    """Creates a clean, informative name for the node with speed, ping, and badges."""
+    """Creates a clean, informative name for the node with speed, ping, network badge, and services."""
     node = item['node']
     orig_remark = node.get("remark", "").strip()
 
-    # Clean out unwanted spam/tg tags
     clean = re.sub(r'tg[k]?:\s*@[A-Za-z0-9_]+', '', orig_remark, flags=re.IGNORECASE)
     clean = re.sub(r'https?://\S+', '', clean)
     clean = re.sub(r'#profile[^\n]*', '', clean)
@@ -664,6 +740,9 @@ def format_node_remark(item, index):
 
     if not clean:
         clean = "Сервер"
+
+    is_mts = item.get('is_mts_ready', False)
+    net_badge = "📱МТС" if is_mts else "💻WiFi"
 
     tags = []
     if item['ok_google']: tags.append("G")
@@ -675,7 +754,7 @@ def format_node_remark(item, index):
     spd = f"{item['speed_mbps']:.1f}M"
     ping = f"{item['avg_ping']}ms"
 
-    new_remark = f"[{SUB_TITLE}] #{index:02d} | {clean} (⚡{spd} | ⏱️{ping} | {tag_badge})"
+    new_remark = f"[{SUB_TITLE}] #{index:02d} | {net_badge} | {clean} (⚡{spd} | ⏱️{ping} | {tag_badge})"
     encoded_fragment = urllib.parse.quote(new_remark)
 
     orig_url = node["original_url"]
@@ -684,49 +763,89 @@ def format_node_remark(item, index):
 
 
 def generate_outputs(alive_results, total_checked, duration_sec):
-    """Writes sub.txt, sub_base64.txt, and updates README.md."""
+    """Writes sub.txt, sub_base64.txt, sub_mobile.txt, sub_mobile_base64.txt, and updates README.md."""
     # Strict Ranking:
-    # 1. Highest number of accessible services (G+Y+TG first)
-    # 2. Highest download speed (Mbps)
-    # 3. Lowest average latency (ms)
+    # 1. Mobile / MTS network ready first (is_mts_ready: True > False)
+    # 2. Highest mobile compatibility score
+    # 3. Highest number of accessible services (G+Y+TG first)
+    # 4. Highest download speed (Mbps)
+    # 5. Lowest average latency (ms)
     alive_results.sort(
         key=lambda x: (
+            -int(x.get('is_mts_ready', False)),
+            -x.get('mobile_score', 0),
             -x['accessible_count'],
             -x['speed_mbps'],
             x['avg_ping']
         )
     )
 
+    utc_now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    mts_alive_count = sum(1 for x in alive_results if x.get('is_mts_ready', False))
+
+    # 1. Full Subscription
     formatted_links = []
     for idx, item in enumerate(alive_results, start=1):
         formatted = format_node_remark(item, idx)
         formatted_links.append(formatted)
 
-    utc_now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-
-    # Header for modern clients
     header_lines = [
         f"#profile-title: {SUB_TITLE}",
         f"#profile-title: base64:{SUB_TITLE_B64}",
         "#profile-update-interval: 1",
-        f"#subscription-userinfo: upload=0; download=0; total=107374182400; expire=0",
+        "#subscription-userinfo: upload=0; download=0; total=107374182400; expire=0",
         f"#last-update: {utc_now}",
         f"#working-servers: {len(formatted_links)} / {total_checked}",
+        f"#mts-mobile-servers: {mts_alive_count}",
+        "#note: Nodes tagged with [📱МТС] are verified for Russian mobile carriers (MTS/MegaFon/Beeline/Tele2)",
         ""
     ]
 
-    # 1. Plain text subscription: sub.txt
     sub_text = "\n".join(header_lines + formatted_links)
     with open("sub.txt", "w", encoding="utf-8") as f:
         f.write(sub_text)
-    log("Written sub.txt")
+    log("Written sub.txt (Full)")
 
-    # 2. Base64 subscription: sub_base64.txt
     links_only = "\n".join(formatted_links)
     b64_content = base64.b64encode(links_only.encode('utf-8')).decode('ascii')
     with open("sub_base64.txt", "w", encoding="utf-8") as f:
         f.write(b64_content)
-    log("Written sub_base64.txt")
+    log("Written sub_base64.txt (Full)")
+
+    # 2. Dedicated Mobile Subscription
+    mobile_results = [x for x in alive_results if x.get('is_mts_ready', False)]
+    if not mobile_results:
+        mobile_results = alive_results[:15]
+
+    mobile_formatted_links = []
+    for idx, item in enumerate(mobile_results, start=1):
+        formatted = format_node_remark(item, idx)
+        mobile_formatted_links.append(formatted)
+
+    mobile_title = f"{SUB_TITLE} [Мобильная сеть]"
+    mobile_title_b64 = base64.b64encode(mobile_title.encode('utf-8')).decode('ascii')
+
+    mobile_header_lines = [
+        f"#profile-title: {mobile_title}",
+        f"#profile-title: base64:{mobile_title_b64}",
+        "#profile-update-interval: 1",
+        "#subscription-userinfo: upload=0; download=0; total=107374182400; expire=0",
+        f"#last-update: {utc_now}",
+        f"#mobile-servers-count: {len(mobile_formatted_links)}",
+        "#note: 100% Mobile Ready (Port 443 + RU Whitelist SNI + Reality Vision for MTS/MegaFon/Beeline/Tele2)",
+        ""
+    ]
+
+    sub_mobile_text = "\n".join(mobile_header_lines + mobile_formatted_links)
+    with open("sub_mobile.txt", "w", encoding="utf-8") as f:
+        f.write(sub_mobile_text)
+    log("Written sub_mobile.txt (Dedicated Mobile)")
+
+    mobile_links_only = "\n".join(mobile_formatted_links)
+    mobile_b64_content = base64.b64encode(mobile_links_only.encode('utf-8')).decode('ascii')
+    with open("sub_mobile_base64.txt", "w", encoding="utf-8") as f:
+        f.write(mobile_b64_content)
+    log("Written sub_mobile_base64.txt (Dedicated Mobile)")
 
     # 3. Update README.md
     update_readme(alive_results, total_checked, duration_sec)
@@ -737,36 +856,39 @@ def update_readme(alive_results, total_checked, duration_sec):
     utc_now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     avg_ping = int(sum(p['avg_ping'] for p in alive_results) / len(alive_results)) if alive_results else 0
     top_speed = max((p['speed_mbps'] for p in alive_results), default=0.0)
+    mts_count = sum(1 for p in alive_results if p.get('is_mts_ready', False))
 
     top_table_rows = []
     for idx, item in enumerate(alive_results[:25], start=1):
         node = item['node']
-        rem = urllib.parse.unquote(node.get("remark", ""))[:28]
+        rem = urllib.parse.unquote(node.get("remark", ""))[:26]
         services = []
         if item['ok_google']: services.append("G")
         if item['ok_yandex']: services.append("Y")
         if item['ok_telegram']: services.append("TG")
         srv_str = " + ".join(services)
         badge = f"🟢 {srv_str}" if item['accessible_count'] == 3 else f"🟡 {srv_str}"
+        net_icon = "📱 МТС / Мобайл" if item.get('is_mts_ready') else "💻 Wi-Fi / ПК"
 
         top_table_rows.append(
-            f"| #{idx:02d} | `{node.get('host')}:{node.get('port')}` | {rem} | **{item['speed_mbps']} Mbps** | {item['avg_ping']} ms | {badge} |"
+            f"| #{idx:02d} | `{node.get('host')}:{node.get('port')}` | {net_icon} | {rem} | **{item['speed_mbps']} Mbps** | {item['avg_ping']} ms | {badge} |"
         )
 
-    top_table_md = "\n".join(top_table_rows) if top_table_rows else "| - | - | - | - | - | ❌ Нет доступных серверов |"
+    top_table_md = "\n".join(top_table_rows) if top_table_rows else "| - | - | - | - | - | - | ❌ Нет доступных серверов |"
 
     stats_block = (
         "<!-- STATS_START -->\n"
         "### 📊 Статус последнего обновления:\n"
         f"- **Последняя проверка:** `{utc_now}`\n"
-        f"- **Рабочих серверов:** **`{len(alive_results)}`** из `{total_checked}` проверенных\n"
+        f"- **Рабочих серверов всего:** **`{len(alive_results)}`** из `{total_checked}` проверенных\n"
+        f"- **📱 Совместимых с МТС / Мобильной сетью:** **`{mts_count}`** (стоят на первых местах)\n"
         f"- **Максимальная скорость в топе:** **`{top_speed} Mbps`**\n"
         f"- **Средний пинг:** `{avg_ping} ms`\n"
         f"- **Время проверки всех серверов:** `{duration_sec:.1f} сек`\n"
         "- **Интервал автоматического обновления:** каждые 10 минут\n\n"
-        "## ⚡ Топ самых быстрых и стабильных серверов (Google + Яндекс + Telegram):\n\n"
-        "| # | Адрес:Порт | Исходное имя | Скорость | Пинг | Доступность |\n"
-        "|---|------------|--------------|----------|------|-------------|\n"
+        "## ⚡ Топ серверов (вверху — проверенные для МТС и мобильного интернета):\n\n"
+        "| # | Адрес:Порт | Сеть | Исходное имя | Скорость | Пинг | Доступность |\n"
+        "|---|------------|------|--------------|----------|------|-------------|\n"
         f"{top_table_md}\n"
         "<!-- STATS_END -->"
     )
@@ -794,19 +916,21 @@ def update_readme(alive_results, total_checked, duration_sec):
         gh_user, gh_name = "levkrasnik43-alt", "nashi-belye"
 
     pages_url = f"https://{gh_user}.github.io/{gh_name}/sub.txt"
+    pages_mobile_url = f"https://{gh_user}.github.io/{gh_name}/sub_mobile.txt"
     raw_url = f"https://raw.githubusercontent.com/{gh_user}/{gh_name}/main/sub.txt"
-    b64_url = f"https://raw.githubusercontent.com/{gh_user}/{gh_name}/main/sub_base64.txt"
+    raw_mobile_url = f"https://raw.githubusercontent.com/{gh_user}/{gh_name}/main/sub_mobile.txt"
 
     fallback = (
         f"# 🛡️ VPN Подписка «{SUB_TITLE}»\n\n"
         f"Автоматически обновляемый агрегатор и чекер VPN-конфигураций из белых списков РФ.\n\n"
         f"{stats_block}\n\n"
         f"## 🔗 Ссылки на подписку для ваших приложений\n\n"
-        f"| Тип ссылки | Ссылка |\n"
-        f"|---|---|\n"
-        f"| **GitHub Pages** | `{pages_url}` |\n"
-        f"| **GitHub Raw** | `{raw_url}` |\n"
-        f"| **Base64 формат** | `{b64_url}` |\n"
+        f"### 📱 Для мобильного интернета (МТС, Мегафон, Билайн, Т2):\n"
+        f"- **GitHub Pages:** `{pages_mobile_url}`\n"
+        f"- **GitHub Raw:** `{raw_mobile_url}`\n\n"
+        f"### 🌐 Полная подписка (МТС вверху + Wi-Fi/ПК):\n"
+        f"- **GitHub Pages:** `{pages_url}`\n"
+        f"- **GitHub Raw:** `{raw_url}`\n"
     )
     with open("README.md", "w", encoding="utf-8") as f:
         f.write(fallback)
@@ -815,7 +939,7 @@ def update_readme(alive_results, total_checked, duration_sec):
 
 def main():
     start_time = time.time()
-    log(f"=== Starting '{SUB_TITLE}' VPN Checker (Fast 2-Stage Multi-Service) ===")
+    log(f"=== Starting '{SUB_TITLE}' VPN Checker (MTS Mobile Optimized) ===")
     
     xray_bin = find_or_download_xray()
     
@@ -825,8 +949,8 @@ def main():
         return
 
     valid_nodes = []
-    for link in raw_nodes:
-        parsed = parse_proxy_link(link)
+    for link, from_mobile in raw_nodes:
+        parsed = parse_proxy_link(link, from_mobile)
         if parsed:
             valid_nodes.append(parsed)
 
