@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-VPN Subscription Aggregator and Multi-Service Speed/Ping Checker
-"Наши белые" - С поддержкой проверки для мобильной сети МТС (ТСПУ / Белые списки SNI / Порт 443)
+VPN Subscription Aggregator & High-Speed Performance Benchmark
+"Наши белые" — Перебор всех серверов по максимальной скорости + Оптимизация для мобильных операторов (МТС)
 """
 
 import os
@@ -19,48 +19,37 @@ import urllib.parse
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Ensure UTF-8 output across all operating systems
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
-# Subscription sources
+SUB_TITLE = "Наши белые"
+SUB_TITLE_B64 = base64.b64encode(SUB_TITLE.encode('utf-8')).decode('ascii')
+
+# Источники серверов
 SUBSCRIPTION_URLS = [
-    # Источник 1: Универсальный проверенный список
-    "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt",
-    # Источник 2: Специализированная база под мобильные операторы РФ (Белые списки Reality)
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
-    # Источник 3: Проверенные RU-SNI конфигурации
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-SNI-RU-all.txt",
-    # Источник 4: Проверенные RU-CIDR конфигурации
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-checked.txt",
-    # Источник 5: Большая отсортированная база
+    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-SNI-RU-all.txt",
+    "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt",
     "https://solovyov-jenya2004.vercel.app/final_sorted/",
 ]
 
-# Regex for Russian domains and CDNs approved in mobile TSPU white-lists (MTS, MegaFon, Beeline, Tele2)
+# Домены РФ для обхода мобильного ТСПУ МТС
 RU_DOMAINS_PATTERN = re.compile(
     r'(\.ru$|\.su$|\.рф$|yandex|ya\.ru|vk\.com|vkvideo|userapi|mail\.ru|ok\.ru|dzen|gosuslugi|mts\.ru|megafon|beeline|tele2|t2\.ru|ozon|wildberries|wb\.ru|tbank|tinkoff|sber|rutube|avito|2gis|kinopoisk|rzd\.ru|rambler|moex|lenta\.ru|rbc\.ru|pepro\.site|oaklandjoseph|rumedia-cdn|wba-pn\.ru|24lider\.ru|abvpn\.ru)',
     re.IGNORECASE
 )
 
-SUB_TITLE = "Наши белые"
-SUB_TITLE_B64 = base64.b64encode(SUB_TITLE.encode('utf-8')).decode('ascii')
-
-# Stage 1: Fast filter for alive nodes (Google captive portal)
 STAGE1_BATCH_SIZE = 60
-STAGE1_TIMEOUT = 2.2
-TEST_GOOGLE_URL = "http://www.google.com/generate_204"
+STAGE1_TIMEOUT = 2.0
+TEST_PING_URL = "http://www.google.com/generate_204"
 
-# Stage 2: Deep qualification & speed test (Yandex, Telegram, Speedtest)
-STAGE2_BATCH_SIZE = 40
-STAGE2_TIMEOUT = 2.2
-TEST_YANDEX_URL = "https://ya.ru"
-TEST_TELEGRAM_URL = "https://api.telegram.org"
-TEST_SPEED_URL = "https://speed.cloudflare.com/__down?bytes=1048576"
-SPEEDTEST_BYTES = 1048576
-SPEEDTEST_TIMEOUT = 2.8
+STAGE2_BATCH_SIZE = 30
+STAGE2_TIMEOUT = 3.2
+TEST_SPEED_URL = "https://speed.cloudflare.com/__down?bytes=1572864"
+SPEEDTEST_BYTES = 1572864
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 
@@ -71,10 +60,8 @@ def log(msg):
 
 
 def find_or_download_xray():
-    """Finds Xray binary in PATH, local dir, or downloads it automatically."""
     os_name = platform.system().lower()
     arch = platform.machine().lower()
-
     exe_name = "xray.exe" if os_name == "windows" else "xray"
 
     search_paths = [
@@ -140,9 +127,7 @@ def find_or_download_xray():
 
 
 def fetch_subscriptions():
-    """Fetches nodes from all configured URLs and returns a deduplicated list with source metadata."""
     all_raw_nodes = []
-    
     for url in SUBSCRIPTION_URLS:
         is_mobile_source = ("Rus-Mobile" in url or "WHITE-SNI" in url or "WHITE-CIDR" in url)
         log(f"Fetching subscription: {url}")
@@ -175,7 +160,6 @@ def fetch_subscriptions():
                     all_raw_nodes.append((line, is_mobile_source))
                     count += 1
             log(f"  -> Extracted {count} nodes from {url}")
-
         except Exception as e:
             log(f"  [ERROR] Failed to fetch {url}: {e}")
 
@@ -200,19 +184,11 @@ def fetch_subscriptions():
 
 
 def evaluate_mobile_readiness(sni, port, sec, flow, from_mobile_source=False):
-    """
-    Evaluates compatibility with Russian mobile operators (MTS, MegaFon, Beeline, Tele2).
-    MTS Mobile TSPU blocks:
-      1. Foreign non-whitelisted SNIs (only approved Russian domains pass).
-      2. Non-standard ports (ports != 443 are blocked/reset on mobile data).
-      3. Non-Vision flows (Vision is required to prevent proxy payload detection).
-    """
     is_ru_sni = bool(RU_DOMAINS_PATTERN.search(sni)) if sni else False
     is_port_443 = (port in (443, 80))
     is_vision = (flow == 'xtls-rprx-vision')
     is_reality = (sec == 'reality')
 
-    # Golden rule for MTS: RU Whitelist SNI + Port 443
     is_mts_ready = (is_ru_sni and is_port_443) or (from_mobile_source and is_port_443)
 
     mobile_score = 0
@@ -234,7 +210,6 @@ def evaluate_mobile_readiness(sni, port, sec, flow, from_mobile_source=False):
 
 
 def parse_vless(link, from_mobile_source=False):
-    """Converts a vless:// URL to an Xray outbound dict and evaluates mobile readiness."""
     try:
         u = urllib.parse.urlparse(link)
         uuid = u.username
@@ -254,14 +229,9 @@ def parse_vless(link, from_mobile_source=False):
 
         sec = q.get('security', 'none').lower()
         flow = q.get('flow', '')
-        
         valid_flow = flow if (net == 'tcp' and sec in ('tls', 'reality')) else ''
 
-        stream = {
-            "network": net,
-            "security": sec
-        }
-
+        stream = {"network": net, "security": sec}
         fp = q.get('fp', 'chrome')
         sni = q.get('sni', '') or q.get('host', '') or host
 
@@ -288,21 +258,11 @@ def parse_vless(link, from_mobile_source=False):
             stream["tcpSettings"] = {"header": {"type": "none"}}
         elif net == 'ws':
             h = q.get('host') or sni or host
-            stream["wsSettings"] = {
-                "path": q.get('path', '/'),
-                "headers": {"Host": h}
-            }
+            stream["wsSettings"] = {"path": q.get('path', '/'), "headers": {"Host": h}}
         elif net == 'grpc':
-            stream["grpcSettings"] = {
-                "serviceName": q.get('serviceName') or q.get('path', ''),
-                "multiMode": False
-            }
+            stream["grpcSettings"] = {"serviceName": q.get('serviceName') or q.get('path', ''), "multiMode": False}
         elif net == 'xhttp':
-            xs = {
-                "mode": q.get('mode', 'auto'),
-                "path": q.get('path', '/'),
-                "host": q.get('host') or sni or ""
-            }
+            xs = {"mode": q.get('mode', 'auto'), "path": q.get('path', '/'), "host": q.get('host') or sni or ""}
             if 'extra' in q and q['extra']:
                 try:
                     xs["extra"] = json.loads(q['extra'])
@@ -311,10 +271,7 @@ def parse_vless(link, from_mobile_source=False):
             stream["xhttpSettings"] = xs
 
         remark = urllib.parse.unquote(u.fragment) if u.fragment else "Node"
-
-        is_mts_ready, mobile_score = evaluate_mobile_readiness(
-            sni, port, sec, valid_flow, from_mobile_source
-        )
+        is_mts_ready, mobile_score = evaluate_mobile_readiness(sni, port, sec, valid_flow, from_mobile_source)
 
         return {
             "protocol": "vless",
@@ -343,7 +300,6 @@ def parse_vless(link, from_mobile_source=False):
 
 
 def parse_trojan(link, from_mobile_source=False):
-    """Converts a trojan:// URL to an Xray outbound dict and evaluates mobile readiness."""
     try:
         u = urllib.parse.urlparse(link)
         password = u.username
@@ -356,11 +312,7 @@ def parse_trojan(link, from_mobile_source=False):
         net = q.get('type', 'tcp').lower()
         sec = q.get('security', 'tls').lower()
 
-        stream = {
-            "network": net,
-            "security": sec
-        }
-
+        stream = {"network": net, "security": sec}
         sni = q.get('sni', '') or q.get('host', '') or host
         fp = q.get('fp', 'chrome')
 
@@ -371,10 +323,7 @@ def parse_trojan(link, from_mobile_source=False):
             }
 
         remark = urllib.parse.unquote(u.fragment) if u.fragment else "Node"
-
-        is_mts_ready, mobile_score = evaluate_mobile_readiness(
-            sni, port, sec, "", from_mobile_source
-        )
+        is_mts_ready, mobile_score = evaluate_mobile_readiness(sni, port, sec, "", from_mobile_source)
 
         return {
             "protocol": "trojan",
@@ -399,7 +348,6 @@ def parse_trojan(link, from_mobile_source=False):
 
 
 def parse_proxy_link(link, from_mobile_source=False):
-    """Parses any supported proxy link."""
     if link.startswith("vless://"):
         return parse_vless(link, from_mobile_source)
     elif link.startswith("trojan://"):
@@ -408,7 +356,6 @@ def parse_proxy_link(link, from_mobile_source=False):
 
 
 def get_free_ports(count):
-    """Allocates ephemeral local ports without conflicts."""
     sockets = []
     ports = []
     for _ in range(count):
@@ -422,25 +369,18 @@ def get_free_ports(count):
 
 
 def test_xray_config(xray_bin, config_path):
-    """Validates configuration with xray run -test."""
     try:
-        res = subprocess.run(
-            [xray_bin, "run", "-test", "-c", config_path],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
+        res = subprocess.run([xray_bin, "run", "-test", "-c", config_path], capture_output=True, text=True, timeout=5)
         return res.returncode == 0
     except Exception:
         return False
 
 
-def test_google_port(port, timeout=STAGE1_TIMEOUT):
-    """Stage 1: Fast test for Google connectivity."""
+def test_ping_port(port, timeout=STAGE1_TIMEOUT):
     proxy_url = f"http://127.0.0.1:{port}"
     proxy_handler = urllib.request.ProxyHandler({'http': proxy_url, 'https': proxy_url})
     opener = urllib.request.build_opener(proxy_handler)
-    req = urllib.request.Request(TEST_GOOGLE_URL, headers={"User-Agent": USER_AGENT})
+    req = urllib.request.Request(TEST_PING_URL, headers={"User-Agent": USER_AGENT})
     start_time = time.time()
     try:
         with opener.open(req, timeout=timeout) as resp:
@@ -453,8 +393,7 @@ def test_google_port(port, timeout=STAGE1_TIMEOUT):
     return False, None
 
 
-def stage1_filter_batch(nodes, xray_bin, config_path):
-    """Runs a batch of nodes through Xray and returns those that reach Google."""
+def stage1_fast_filter(nodes, xray_bin, config_path):
     if not nodes:
         return []
 
@@ -491,10 +430,7 @@ def stage1_filter_batch(nodes, xray_bin, config_path):
         "log": {"loglevel": "none"},
         "inbounds": inbounds,
         "outbounds": outbounds,
-        "routing": {
-            "domainStrategy": "AsIs",
-            "rules": rules
-        }
+        "routing": {"domainStrategy": "AsIs", "rules": rules}
     }
 
     with open(config_path, "w", encoding="utf-8") as f:
@@ -503,25 +439,20 @@ def stage1_filter_batch(nodes, xray_bin, config_path):
     if not test_xray_config(xray_bin, config_path):
         if len(nodes) > 1:
             mid = len(nodes) // 2
-            left = stage1_filter_batch(nodes[:mid], xray_bin, config_path + ".1")
-            right = stage1_filter_batch(nodes[mid:], xray_bin, config_path + ".2")
+            left = stage1_fast_filter(nodes[:mid], xray_bin, config_path + ".1")
+            right = stage1_fast_filter(nodes[mid:], xray_bin, config_path + ".2")
             return left + right
         else:
             return []
 
-    proc = subprocess.Popen(
-        [xray_bin, "run", "-c", config_path],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
-    )
-
+    proc = subprocess.Popen([xray_bin, "run", "-c", config_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(0.3)
     alive_in_batch = []
 
     try:
         with ThreadPoolExecutor(max_workers=len(nodes)) as executor:
             future_to_idx = {
-                executor.submit(test_google_port, ports[i]): i
+                executor.submit(test_ping_port, ports[i]): i
                 for i in range(len(nodes))
             }
             for future in as_completed(future_to_idx):
@@ -530,8 +461,7 @@ def stage1_filter_batch(nodes, xray_bin, config_path):
                 if ok:
                     alive_in_batch.append({
                         "node": nodes[idx],
-                        "ok_google": True,
-                        "ping_google": ping_ms,
+                        "ping_ms": ping_ms,
                         "is_mts_ready": nodes[idx].get("is_mts_ready", False),
                         "mobile_score": nodes[idx].get("mobile_score", 0)
                     })
@@ -550,95 +480,58 @@ def stage1_filter_batch(nodes, xray_bin, config_path):
     return alive_in_batch
 
 
-def stage2_deep_check_node(port, item):
-    """Stage 2: Checks Yandex, Telegram, and measures real download speed."""
+def benchmark_speed_single_node(port, item):
     proxy_url = f"http://127.0.0.1:{port}"
     proxy_handler = urllib.request.ProxyHandler({'http': proxy_url, 'https': proxy_url})
     opener = urllib.request.build_opener(proxy_handler)
 
-    # 1. Yandex check
-    ok_yandex = False
-    ping_yandex = None
-    try:
-        req = urllib.request.Request(TEST_YANDEX_URL, headers={"User-Agent": USER_AGENT})
-        t0 = time.time()
-        with opener.open(req, timeout=STAGE2_TIMEOUT) as resp:
-            if resp.getcode() < 400:
-                ok_yandex = True
-                ping_yandex = int((time.time() - t0) * 1000)
-    except Exception:
-        pass
-
-    # 2. Telegram check
-    ok_telegram = False
-    ping_telegram = None
-    try:
-        req = urllib.request.Request(TEST_TELEGRAM_URL, headers={"User-Agent": USER_AGENT})
-        t0 = time.time()
-        try:
-            with opener.open(req, timeout=STAGE2_TIMEOUT) as resp:
-                if resp.getcode() in (200, 301, 302, 404):
-                    ok_telegram = True
-                    ping_telegram = int((time.time() - t0) * 1000)
-        except urllib.error.HTTPError as e:
-            if e.code in (200, 301, 302, 404):
-                ok_telegram = True
-                ping_telegram = int((time.time() - t0) * 1000)
-    except Exception:
-        pass
-
-    # 3. Speed test (download up to 1MB)
+    total_bytes = 0
+    start_time = time.perf_counter()
     speed_mbps = 0.5
+    ping_ms = item.get('ping_ms', 100)
+
     try:
         req = urllib.request.Request(TEST_SPEED_URL, headers={"User-Agent": USER_AGENT})
-        t0 = time.time()
-        total_bytes = 0
-        with opener.open(req, timeout=SPEEDTEST_TIMEOUT) as resp:
+        with opener.open(req, timeout=STAGE2_TIMEOUT) as resp:
+            ttfb_ms = int((time.perf_counter() - start_time) * 1000)
+            if ttfb_ms > 0:
+                ping_ms = min(ping_ms, ttfb_ms)
+
             while True:
                 chunk = resp.read(65536)
                 if not chunk:
                     break
                 total_bytes += len(chunk)
-                if total_bytes >= SPEEDTEST_BYTES or (time.time() - t0) >= SPEEDTEST_TIMEOUT:
+                if total_bytes >= SPEEDTEST_BYTES or (time.perf_counter() - start_time) >= STAGE2_TIMEOUT:
                     break
-        dur = max(time.time() - t0, 0.05)
+
+        elapsed = max(time.perf_counter() - start_time, 0.05)
         if total_bytes > 0:
-            speed_mbps = round((total_bytes * 8) / (dur * 1_000_000), 1)
+            speed_mbps = round((total_bytes * 8) / (elapsed * 1_000_000), 1)
     except Exception:
-        pass
-
-    pings = [p for p in (item['ping_google'], ping_yandex, ping_telegram) if p is not None]
-    avg_ping = int(sum(pings) / len(pings)) if pings else item['ping_google']
-
-    accessible_count = (1 if item['ok_google'] else 0) + (1 if ok_yandex else 0) + (1 if ok_telegram else 0)
+        elapsed = max(time.perf_counter() - start_time, 0.1)
+        if total_bytes > 10000:
+            speed_mbps = round((total_bytes * 8) / (elapsed * 1_000_000), 1)
 
     return {
         "node": item['node'],
-        "ok_google": item['ok_google'],
-        "ping_google": item['ping_google'],
-        "ok_yandex": ok_yandex,
-        "ping_yandex": ping_yandex,
-        "ok_telegram": ok_telegram,
-        "ping_telegram": ping_telegram,
         "speed_mbps": speed_mbps,
-        "avg_ping": avg_ping,
-        "accessible_count": accessible_count,
+        "ping_ms": ping_ms,
         "is_mts_ready": item.get('is_mts_ready', False),
         "mobile_score": item.get('mobile_score', 0)
     }
 
 
-def stage2_qualify(candidates, xray_bin):
-    """Runs deep checks (Yandex, Telegram, Speed) on candidates that passed Google check."""
+def stage2_speed_benchmark(candidates, xray_bin):
     if not candidates:
         return []
 
-    log(f"Starting Stage 2: Deep check (Yandex, Telegram, Speed) on {len(candidates)} alive nodes...")
-    qualified_results = []
+    log(f"Starting Stage 2: Direct Speed Benchmark on {len(candidates)} alive nodes...")
+    benchmarked_results = []
     batches = [candidates[i:i + STAGE2_BATCH_SIZE] for i in range(0, len(candidates), STAGE2_BATCH_SIZE)]
 
     for b_idx, batch in enumerate(batches, start=1):
-        config_path = f"tmp_stage2_{b_idx}_{int(time.time())}.json"
+        config_path = f"tmp_speed_{b_idx}_{int(time.time())}.json"
         ports = get_free_ports(len(batch))
         inbounds = []
         outbounds = []
@@ -680,19 +573,12 @@ def stage2_qualify(candidates, xray_bin):
             json.dump(full_cfg, f, indent=2)
 
         if not test_xray_config(xray_bin, config_path):
-            log("Stage 2 config validation failed, using Google results...")
+            log("Config validation error, retaining fallback speeds...")
             for item in batch:
-                qualified_results.append({
+                benchmarked_results.append({
                     "node": item['node'],
-                    "ok_google": True,
-                    "ping_google": item['ping_google'],
-                    "ok_yandex": True,
-                    "ping_yandex": item['ping_google'],
-                    "ok_telegram": True,
-                    "ping_telegram": item['ping_google'],
                     "speed_mbps": 5.0,
-                    "avg_ping": item['ping_google'],
-                    "accessible_count": 3,
+                    "ping_ms": item.get('ping_ms', 100),
                     "is_mts_ready": item.get('is_mts_ready', False),
                     "mobile_score": item.get('mobile_score', 0)
                 })
@@ -704,15 +590,15 @@ def stage2_qualify(candidates, xray_bin):
         try:
             with ThreadPoolExecutor(max_workers=len(batch)) as executor:
                 futures = [
-                    executor.submit(stage2_deep_check_node, ports[i], batch[i])
+                    executor.submit(benchmark_speed_single_node, ports[i], batch[i])
                     for i in range(len(batch))
                 ]
                 for future in as_completed(futures):
                     res = future.result()
-                    qualified_results.append(res)
+                    benchmarked_results.append(res)
                     rem = res['node'].get('remark', '')[:25]
-                    mts_flag = "📱МТС" if res.get('is_mts_ready') else "💻WiFi"
-                    log(f"  [{mts_flag}] {rem} -> ⚡{res['speed_mbps']}Mbps | ⏱️{res['avg_ping']}ms | G:{res['ok_google']} Y:{res['ok_yandex']} TG:{res['ok_telegram']}")
+                    mts_icon = "📱МТС" if res.get('is_mts_ready') else "💻WiFi"
+                    log(f"  [{mts_icon}] ⚡ {res['speed_mbps']:5.1f} Mbps | ⏱️ {res['ping_ms']}ms | {rem}")
         finally:
             proc.terminate()
             try:
@@ -725,11 +611,10 @@ def stage2_qualify(candidates, xray_bin):
                 except Exception:
                     pass
 
-    return qualified_results
+    return benchmarked_results
 
 
 def format_node_remark(item, index):
-    """Creates a clean, informative name for the node with speed, ping, network badge, and services."""
     node = item['node']
     orig_remark = node.get("remark", "").strip()
 
@@ -744,17 +629,10 @@ def format_node_remark(item, index):
     is_mts = item.get('is_mts_ready', False)
     net_badge = "📱МТС" if is_mts else "💻WiFi"
 
-    tags = []
-    if item['ok_google']: tags.append("G")
-    if item['ok_yandex']: tags.append("Y")
-    if item['ok_telegram']: tags.append("TG")
-    tag_str = "+".join(tags)
-    tag_badge = f"🟢 {tag_str}" if item['accessible_count'] == 3 else f"🟡 {tag_str}"
+    spd = f"{item['speed_mbps']:.1f} Mbps"
+    ping = f"{item['ping_ms']}ms"
 
-    spd = f"{item['speed_mbps']:.1f}M"
-    ping = f"{item['avg_ping']}ms"
-
-    new_remark = f"[{SUB_TITLE}] #{index:02d} | {net_badge} | {clean} (⚡{spd} | ⏱️{ping} | {tag_badge})"
+    new_remark = f"[{SUB_TITLE}] #{index:02d} | ⚡ {spd} | {net_badge} | {clean} (⏱️{ping})"
     encoded_fragment = urllib.parse.quote(new_remark)
 
     orig_url = node["original_url"]
@@ -763,98 +641,99 @@ def format_node_remark(item, index):
 
 
 def generate_outputs(alive_results, total_checked, duration_sec):
-    """Writes sub.txt, sub_base64.txt, sub_mobile.txt, sub_mobile_base64.txt, and updates README.md."""
-    # Strict Ranking:
-    # 1. Mobile / MTS network ready first (is_mts_ready: True > False)
-    # 2. Highest mobile compatibility score
-    # 3. Highest number of accessible services (G+Y+TG first)
-    # 4. Highest download speed (Mbps)
-    # 5. Lowest average latency (ms)
     alive_results.sort(
         key=lambda x: (
-            -int(x.get('is_mts_ready', False)),
-            -x.get('mobile_score', 0),
-            -x['accessible_count'],
-            -x['speed_mbps'],
-            x['avg_ping']
+            -int(x.get('is_mts_ready', False)),  # МТС сервера на самом верху
+            -x['speed_mbps'],                    # Строго по скорости (Mbps)
+            x['ping_ms']                         # По минимальному пингу
         )
     )
 
     utc_now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    mts_alive_count = sum(1 for x in alive_results if x.get('is_mts_ready', False))
+    mts_nodes = [x for x in alive_results if x.get('is_mts_ready', False)]
+    top_speed = max((p['speed_mbps'] for p in alive_results), default=0.0)
 
-    # 1. Full Subscription
-    formatted_links = []
-    for idx, item in enumerate(alive_results, start=1):
-        formatted = format_node_remark(item, idx)
-        formatted_links.append(formatted)
+    # 1. Основная подписка (МТС в топе + Wi-Fi)
+    full_links = [format_node_remark(item, idx) for idx, item in enumerate(alive_results, start=1)]
 
-    header_lines = [
-        f"#profile-title: {SUB_TITLE}",
+    header_full = [
+        f"#profile-title: {SUB_TITLE} [Максимальная скорость]",
         f"#profile-title: base64:{SUB_TITLE_B64}",
         "#profile-update-interval: 1",
         "#subscription-userinfo: upload=0; download=0; total=107374182400; expire=0",
         f"#last-update: {utc_now}",
-        f"#working-servers: {len(formatted_links)} / {total_checked}",
-        f"#mts-mobile-servers: {mts_alive_count}",
-        "#note: Nodes tagged with [📱МТС] are verified for Russian mobile carriers (MTS/MegaFon/Beeline/Tele2)",
+        f"#working-servers: {len(full_links)} / {total_checked}",
+        f"#max-speed-top: {top_speed} Mbps",
+        f"#mts-mobile-servers: {len(mts_nodes)}",
+        "#sorting: Speed-Sorted (Top positions 1..N = Mobile MTS Ready)",
         ""
     ]
 
-    sub_text = "\n".join(header_lines + formatted_links)
     with open("sub.txt", "w", encoding="utf-8") as f:
-        f.write(sub_text)
-    log("Written sub.txt (Full)")
+        f.write("\n".join(header_full + full_links))
+    log("Written sub.txt (Full, Speed-Sorted)")
 
-    links_only = "\n".join(formatted_links)
-    b64_content = base64.b64encode(links_only.encode('utf-8')).decode('ascii')
+    b64_full = base64.b64encode("\n".join(full_links).encode('utf-8')).decode('ascii')
     with open("sub_base64.txt", "w", encoding="utf-8") as f:
-        f.write(b64_content)
+        f.write(b64_full)
     log("Written sub_base64.txt (Full)")
 
-    # 2. Dedicated Mobile Subscription
-    mobile_results = [x for x in alive_results if x.get('is_mts_ready', False)]
-    if not mobile_results:
-        mobile_results = alive_results[:15]
+    # 2. Мобильная подписка (ТОЛЬКО сервера для мобильной сети МТС)
+    mobile_target = mts_nodes if mts_nodes else alive_results[:15]
+    mobile_target.sort(key=lambda x: (-x['speed_mbps'], x['ping_ms']))
+    mobile_links = [format_node_remark(item, idx) for idx, item in enumerate(mobile_target, start=1)]
 
-    mobile_formatted_links = []
-    for idx, item in enumerate(mobile_results, start=1):
-        formatted = format_node_remark(item, idx)
-        mobile_formatted_links.append(formatted)
-
-    mobile_title = f"{SUB_TITLE} [Мобильная сеть]"
+    mobile_title = f"{SUB_TITLE} [МТС Мобайл ⚡ Скорость]"
     mobile_title_b64 = base64.b64encode(mobile_title.encode('utf-8')).decode('ascii')
 
-    mobile_header_lines = [
+    header_mobile = [
         f"#profile-title: {mobile_title}",
         f"#profile-title: base64:{mobile_title_b64}",
         "#profile-update-interval: 1",
         "#subscription-userinfo: upload=0; download=0; total=107374182400; expire=0",
         f"#last-update: {utc_now}",
-        f"#mobile-servers-count: {len(mobile_formatted_links)}",
+        f"#mobile-servers-count: {len(mobile_links)}",
         "#note: 100% Mobile Ready (Port 443 + RU Whitelist SNI + Reality Vision for MTS/MegaFon/Beeline/Tele2)",
         ""
     ]
 
-    sub_mobile_text = "\n".join(mobile_header_lines + mobile_formatted_links)
     with open("sub_mobile.txt", "w", encoding="utf-8") as f:
-        f.write(sub_mobile_text)
-    log("Written sub_mobile.txt (Dedicated Mobile)")
+        f.write("\n".join(header_mobile + mobile_links))
+    log("Written sub_mobile.txt (Dedicated Mobile, Speed-Sorted)")
 
-    mobile_links_only = "\n".join(mobile_formatted_links)
-    mobile_b64_content = base64.b64encode(mobile_links_only.encode('utf-8')).decode('ascii')
+    b64_mobile = base64.b64encode("\n".join(mobile_links).encode('utf-8')).decode('ascii')
     with open("sub_mobile_base64.txt", "w", encoding="utf-8") as f:
-        f.write(mobile_b64_content)
+        f.write(b64_mobile)
     log("Written sub_mobile_base64.txt (Dedicated Mobile)")
 
-    # 3. Update README.md
+    # 3. Чистый ТОП по скорости (Все сервера подряд)
+    pure_speed_list = sorted(alive_results, key=lambda x: (-x['speed_mbps'], x['ping_ms']))
+    pure_speed_links = [format_node_remark(item, idx) for idx, item in enumerate(pure_speed_list, start=1)]
+
+    header_pure_speed = [
+        f"#profile-title: {SUB_TITLE} [Чистый ТОП Скорости]",
+        "#profile-update-interval: 1",
+        f"#last-update: {utc_now}",
+        f"#working-servers: {len(pure_speed_links)}",
+        f"#max-speed: {top_speed} Mbps",
+        ""
+    ]
+
+    with open("sub_speed.txt", "w", encoding="utf-8") as f:
+        f.write("\n".join(header_pure_speed + pure_speed_links))
+    log("Written sub_speed.txt (Pure Speed)")
+
+    b64_pure_speed = base64.b64encode("\n".join(pure_speed_links).encode('utf-8')).decode('ascii')
+    with open("sub_speed_base64.txt", "w", encoding="utf-8") as f:
+        f.write(b64_pure_speed)
+    log("Written sub_speed_base64.txt (Pure Speed)")
+
     update_readme(alive_results, total_checked, duration_sec)
 
 
 def update_readme(alive_results, total_checked, duration_sec):
-    """Updates README.md stats and server table, or creates it if missing."""
     utc_now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    avg_ping = int(sum(p['avg_ping'] for p in alive_results) / len(alive_results)) if alive_results else 0
+    avg_ping = int(sum(p['ping_ms'] for p in alive_results) / len(alive_results)) if alive_results else 0
     top_speed = max((p['speed_mbps'] for p in alive_results), default=0.0)
     mts_count = sum(1 for p in alive_results if p.get('is_mts_ready', False))
 
@@ -862,33 +741,27 @@ def update_readme(alive_results, total_checked, duration_sec):
     for idx, item in enumerate(alive_results[:25], start=1):
         node = item['node']
         rem = urllib.parse.unquote(node.get("remark", ""))[:26]
-        services = []
-        if item['ok_google']: services.append("G")
-        if item['ok_yandex']: services.append("Y")
-        if item['ok_telegram']: services.append("TG")
-        srv_str = " + ".join(services)
-        badge = f"🟢 {srv_str}" if item['accessible_count'] == 3 else f"🟡 {srv_str}"
         net_icon = "📱 МТС / Мобайл" if item.get('is_mts_ready') else "💻 Wi-Fi / ПК"
 
         top_table_rows.append(
-            f"| #{idx:02d} | `{node.get('host')}:{node.get('port')}` | {net_icon} | {rem} | **{item['speed_mbps']} Mbps** | {item['avg_ping']} ms | {badge} |"
+            f"| #{idx:02d} | **⚡ {item['speed_mbps']} Mbps** | {net_icon} | `{node.get('host')}:{node.get('port')}` | {rem} | {item['ping_ms']} ms |"
         )
 
-    top_table_md = "\n".join(top_table_rows) if top_table_rows else "| - | - | - | - | - | - | ❌ Нет доступных серверов |"
+    top_table_md = "\n".join(top_table_rows) if top_table_rows else "| - | - | - | - | - | - |"
 
     stats_block = (
         "<!-- STATS_START -->\n"
-        "### 📊 Статус последнего обновления:\n"
-        f"- **Последняя проверка:** `{utc_now}`\n"
+        "### 📊 Результаты скоростного тестирования:\n"
+        f"- **Последний замер скорости:** `{utc_now}`\n"
+        f"- **Максимальная скорость в топе:** **`⚡ {top_speed} Mbps`**\n"
         f"- **Рабочих серверов всего:** **`{len(alive_results)}`** из `{total_checked}` проверенных\n"
-        f"- **📱 Совместимых с МТС / Мобильной сетью:** **`{mts_count}`** (стоят на первых местах)\n"
-        f"- **Максимальная скорость в топе:** **`{top_speed} Mbps`**\n"
+        f"- **📱 Готовы для мобильных операторов (МТС):** **`{mts_count}`** (вынесены на первые места)\n"
         f"- **Средний пинг:** `{avg_ping} ms`\n"
-        f"- **Время проверки всех серверов:** `{duration_sec:.1f} сек`\n"
-        "- **Интервал автоматического обновления:** каждые 10 минут\n\n"
-        "## ⚡ Топ серверов (вверху — проверенные для МТС и мобильного интернета):\n\n"
-        "| # | Адрес:Порт | Сеть | Исходное имя | Скорость | Пинг | Доступность |\n"
-        "|---|------------|------|--------------|----------|------|-------------|\n"
+        f"- **Время полного тестирования:** `{duration_sec:.1f} сек`\n"
+        "- **Автообновление:** каждые 30 минут\n\n"
+        "## ⚡ Топ самых быстрых серверов (вверху — проверенные для МТС/Мобильных сетей):\n\n"
+        "| # | Скорость | Сеть | Адрес:Порт | Имя сервера | Пинг |\n"
+        "|---|----------|------|------------|-------------|------|\n"
         f"{top_table_md}\n"
         "<!-- STATS_END -->"
     )
@@ -908,38 +781,10 @@ def update_readme(alive_results, total_checked, duration_sec):
         except Exception as e:
             log(f"Warning: Failed to update README.md stats: {e}")
 
-    # Fallback if tags not found or README.md does not exist
-    gh_repo = os.environ.get("GITHUB_REPOSITORY", "levkrasnik43-alt/nashi-belye")
-    if "/" in gh_repo:
-        gh_user, gh_name = gh_repo.split("/", 1)
-    else:
-        gh_user, gh_name = "levkrasnik43-alt", "nashi-belye"
-
-    pages_url = f"https://{gh_user}.github.io/{gh_name}/sub.txt"
-    pages_mobile_url = f"https://{gh_user}.github.io/{gh_name}/sub_mobile.txt"
-    raw_url = f"https://raw.githubusercontent.com/{gh_user}/{gh_name}/main/sub.txt"
-    raw_mobile_url = f"https://raw.githubusercontent.com/{gh_user}/{gh_name}/main/sub_mobile.txt"
-
-    fallback = (
-        f"# 🛡️ VPN Подписка «{SUB_TITLE}»\n\n"
-        f"Автоматически обновляемый агрегатор и чекер VPN-конфигураций из белых списков РФ.\n\n"
-        f"{stats_block}\n\n"
-        f"## 🔗 Ссылки на подписку для ваших приложений\n\n"
-        f"### 📱 Для мобильного интернета (МТС, Мегафон, Билайн, Т2):\n"
-        f"- **GitHub Pages:** `{pages_mobile_url}`\n"
-        f"- **GitHub Raw:** `{raw_mobile_url}`\n\n"
-        f"### 🌐 Полная подписка (МТС вверху + Wi-Fi/ПК):\n"
-        f"- **GitHub Pages:** `{pages_url}`\n"
-        f"- **GitHub Raw:** `{raw_url}`\n"
-    )
-    with open("README.md", "w", encoding="utf-8") as f:
-        f.write(fallback)
-    log("Written fallback README.md")
-
 
 def main():
     start_time = time.time()
-    log(f"=== Starting '{SUB_TITLE}' VPN Checker (MTS Mobile Optimized) ===")
+    log(f"=== Starting '{SUB_TITLE}' VPN Speed Benchmark (MTS Mobile Optimized) ===")
     
     xray_bin = find_or_download_xray()
     
@@ -956,34 +801,34 @@ def main():
 
     log(f"Parsed {len(valid_nodes)} valid configurations for testing.")
 
-    # Stage 1: Fast Google Filter
+    # Этап 1: Быстрый отсев неработающих узлов
     alive_stage1 = []
     total = len(valid_nodes)
     batches = [valid_nodes[i:i + STAGE1_BATCH_SIZE] for i in range(0, total, STAGE1_BATCH_SIZE)]
 
-    log(f"--- Stage 1: Fast filtering {len(batches)} batches (batch size: {STAGE1_BATCH_SIZE}) ---")
+    log(f"--- Stage 1: Ultra-fast alive check of {len(batches)} batches ---")
 
     for b_idx, batch in enumerate(batches, start=1):
         tmp_cfg = f"tmp_s1_{b_idx}_{int(time.time())}.json"
         b_start = time.time()
-        res = stage1_filter_batch(batch, xray_bin, tmp_cfg)
+        res = stage1_fast_filter(batch, xray_bin, tmp_cfg)
         b_dur = time.time() - b_start
         alive_stage1.extend(res)
-        log(f"Batch {b_idx}/{len(batches)} in {b_dur:.1f}s: {len(res)} alive. (Total: {len(alive_stage1)})")
+        log(f"Batch {b_idx}/{len(batches)} in {b_dur:.1f}s: {len(res)} alive. (Total alive: {len(alive_stage1)})")
 
     s1_duration = time.time() - start_time
-    log(f"Stage 1 complete in {s1_duration:.1f}s! {len(alive_stage1)}/{len(valid_nodes)} nodes alive.")
+    log(f"Stage 1 complete in {s1_duration:.1f}s! {len(alive_stage1)}/{len(valid_nodes)} nodes responding.")
 
-    # Stage 2: Deep check on alive nodes (Yandex, Telegram, Speed)
+    # Этап 2: Замер реальной скорости скачивания (Throughput)
     if alive_stage1:
-        qualified = stage2_qualify(alive_stage1, xray_bin)
+        benchmarked = stage2_speed_benchmark(alive_stage1, xray_bin)
     else:
-        qualified = []
+        benchmarked = []
 
     total_duration = time.time() - start_time
-    log(f"=== All checks complete in {total_duration:.1f}s! Qualified: {len(qualified)}/{len(valid_nodes)} ===")
+    log(f"=== All speed tests complete in {total_duration:.1f}s! Benchmarked: {len(benchmarked)} nodes ===")
 
-    generate_outputs(qualified, len(valid_nodes), total_duration)
+    generate_outputs(benchmarked, len(valid_nodes), total_duration)
 
 
 if __name__ == "__main__":
