@@ -87,25 +87,7 @@
 
 ---
 
-## 🚀 Как запустить этот проект на своём GitHub
 
-1. **Создайте публичный репозиторий** на [GitHub](https://github.com/new) (например `nashi-belye`).
-2. **Загрузите файлы:**
-   - `.github/workflows/checker.yml`
-   - `checker.py`
-   - `requirements.txt`
-   - `.gitignore`
-   - `README.md`
-3. **Выдайте права действиям (ВАЖНО!):**
-   - Перейдите в **Settings** ➔ **Actions** ➔ **General**.
-   - В разделе **Workflow permissions** выберите **Read and write permissions**.
-   - Сохраните (**Save**).
-4. **Запустите проверку вручную:**
-   - Вкладка **Actions** ➔ выберите воркфлоу ➔ нажмите **Run workflow**.
-5. **Включите GitHub Pages (по желанию):**
-   - **Settings** ➔ **Pages** ➔ в поле Branch выберите `main`, папку `/ (root)` ➔ **Save**.
-
----
 
 ## ⚙️ Источники конфигураций:
 1. `https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt`
