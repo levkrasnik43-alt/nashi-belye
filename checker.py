@@ -542,6 +542,16 @@ def generate_outputs(alive_results, total_checked, duration_sec):
 
     top_table_md = "\n".join(top_table_rows) if top_table_rows else "| - | - | Нет доступных серверов | - | ❌ |"
 
+    gh_repo = os.environ.get("GITHUB_REPOSITORY", "levkrasnik43-alt/nashi-belye")
+    if "/" in gh_repo:
+        gh_user, gh_name = gh_repo.split("/", 1)
+    else:
+        gh_user, gh_name = "levkrasnik43-alt", "nashi-belye"
+
+    pages_url = f"https://{gh_user}.github.io/{gh_name}/sub.txt"
+    raw_url = f"https://raw.githubusercontent.com/{gh_user}/{gh_name}/main/sub.txt"
+    b64_url = f"https://raw.githubusercontent.com/{gh_user}/{gh_name}/main/sub_base64.txt"
+
     readme_content = f"""# 🛡️ VPN Подписка «{SUB_TITLE}»
 
 Автоматически обновляемый агрегатор и чекер VPN-конфигураций из белых списков РФ.
@@ -565,118 +575,11 @@ def generate_outputs(alive_results, total_checked, duration_sec):
 
 | Тип ссылки | Ссылка | Для каких клиентов |
 |------------|--------|---------------------|
-| **GitHub Pages** *(самая быстрая в РФ)* | `https://ВАШ_GITHUB_ЛОГИН.github.io/ВАШ_РЕПОЗИТОРИЙ/sub.txt` | v2rayNG, Hiddify, v2rayN, Sing-box, NekoBox, Happ |
-| **GitHub Raw (Текст)** | `https://raw.githubusercontent.com/ВАШ_GITHUB_ЛОГИН/ВАШ_РЕПОЗИТОРИЙ/main/sub.txt` | v2rayNG, Hiddify, v2rayN, FoXray, Streisand |
-| **Base64 формат** | `https://raw.githubusercontent.com/ВАШ_GITHUB_ЛОГИН/ВАШ_РЕПОЗИТОРИЙ/main/sub_base64.txt` | Shadowrocket, старые версии клиентов |
+| **GitHub Pages** *(самая быстрая в РФ)* | `{pages_url}` | v2rayNG, Hiddify, v2rayN, Sing-box, NekoBox, Happ |
+| **GitHub Raw (Текст)** | `{raw_url}` | v2rayNG, Hiddify, v2rayN, FoXray, Streisand |
+| **Base64 формат** | `{b64_url}` | Shadowrocket, старые версии клиентов |
 
-*(Замените `ВАШ_GITHUB_ЛОГИН` и `ВАШ_РЕПОЗИТОРИЙ` на ваши реальные значения на GitHub)*
-
----
-
-## ⚡ Топ самых быстрых серверов (на момент последней проверки):
-
-| # | Адрес:Порт | Исходное имя | Пинг к Google | Статус |
-|---|------------|--------------|---------------|--------|
-{top_table_md}
-
----
-
-## 📱 Как добавить подписку в приложения
-
-### 1. v2rayNG (Android):
-1. Откройте боковое меню (три полоски слева вверху) ➔ **Группы подписок**.
-2. Нажмите **+** (добавить).
-3. В поле **Имя примечания** введите: `{SUB_TITLE}`.
-4. В поле **URL-адрес подписки** вставьте ссылку.
-5. Сохраните (галочка вверху).
-6. Вернитесь на главный экран, нажмите три точки справа вверху ➔ **Обновить подписку**.
-
-### 2. Hiddify (Android / iOS / Windows / macOS / Linux):
-1. Нажмите **Новый профиль** (или иконку **+**).
-2. Выберите **Добавить ссылку**.
-3. Вставьте ссылку на подписку и сохраните.
-4. Профиль автоматически назовётся «{SUB_TITLE}» и загрузит рабочие сервера.
-
-### 3. v2rayN (Windows):
-1. Нажмите в верхнем меню **Подписка** ➔ **Настройка групп подписок**.
-2. Нажмите **Добавить**.
-3. Примечание: `{SUB_TITLE}`.
-4. URL-адрес: вставьте вашу ссылку.
-5. Нажмите **Подтвердить**.
-6. В меню **Подписка** нажмите **Обновить подписку без прокси**.
-
----
-
-## 🚀 Как запустить этот проект на своём GitHub
-
-1. **Создайте публичный репозиторий** на [GitHub](https://github.com/new) (например `nashi-belye`).
-2. **Загрузите файлы:**
-   - `.github/workflows/checker.yml`
-   - `checker.py`
-   - `requirements.txt`
-   - `.gitignore`
-   - `README.md`
-3. **Выдайте права действиям (ВАЖНО!):**
-   - Перейдите в **Settings** ➔ **Actions** ➔ **General**.
-   - В разделе **Workflow permissions** выберите **Read and write permissions**.
-   - Сохраните (**Save**).
-4. **Запустите проверку вручную:**
-   - Вкладка **Actions** ➔ выберите воркфлоу ➔ нажмите **Run workflow**.
-5. **Включите GitHub Pages (по желанию):**
-   - **Settings** ➔ **Pages** ➔ в поле Branch выберите `main`, папку `/ (root)` ➔ **Save**.
-
----
-
-## ⚙️ Источники конфигураций:
-1. `https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt`
-2. `https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt`
-3. `https://solovyov-jenya2004.vercel.app/final_sorted/`
-"""
-    with open("README.md", "w", encoding="utf-8") as f:
-        f.write(readme_content)
-    log("Written README.md")
-
-
-def main():
-    start_time = time.time()
-    log(f"=== Starting '{SUB_TITLE}' VPN Checker ===")
-    
-    xray_bin = find_or_download_xray()
-    
-    raw_nodes = fetch_subscriptions()
-    if not raw_nodes:
-        log("No nodes fetched from sources. Exiting.")
-        return
-
-    # Parse nodes
-    valid_nodes = []
-    for link in raw_nodes:
-        parsed = parse_proxy_link(link)
-        if parsed:
-            valid_nodes.append(parsed)
-
-    log(f"Parsed {len(valid_nodes)} valid configurations for testing.")
-
-    # Process in batches
-    alive_nodes = []
-    total = len(valid_nodes)
-    batches = [valid_nodes[i:i + BATCH_SIZE] for i in range(0, total, BATCH_SIZE)]
-
-    log(f"Split into {len(batches)} batches (batch size: {BATCH_SIZE}). Testing Google connectivity...")
-
-    for b_idx, batch in enumerate(batches, start=1):
-        tmp_cfg = f"tmp_cfg_{b_idx}_{int(time.time())}.json"
-        b_start = time.time()
-        res = check_batch_slice(batch, xray_bin, tmp_cfg)
-        b_dur = time.time() - b_start
-        alive_nodes.extend(res)
-        log(f"Batch {b_idx}/{len(batches)} finished in {b_dur:.1f}s: {len(res)}/{len(batch)} alive. Total alive so far: {len(alive_nodes)}")
-
-    total_duration = time.time() - start_time
-    log(f"=== Check complete in {total_duration:.1f}s! Alive: {len(alive_nodes)}/{len(valid_nodes)} ===")
-
-    generate_outputs(alive_nodes, len(valid_nodes), total_duration)
-
-
-if __name__ == "__main__":
-    main()
+### Прямые ссылки для удобного копирования:
+- **GitHub Pages:**
+  ```text
+  {pages_url}
