@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+*$py.class
+xray
+xray.exe
+*.zip
+tmp_cfg_*.json
