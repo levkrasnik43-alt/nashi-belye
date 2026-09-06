@@ -2,9 +2,9 @@ name: Update 'Наши белые' VPN Subscription
 
 on:
   schedule:
-    # Запуск каждые 10 минут
-    - cron: '*/10 * * * *'
-  workflow_dispatch: # Кнопка для ручного запуска в любое время
+    # Запуск каждые 30 минут
+    - cron: '*/30 * * * *'
+  workflow_dispatch: # Ручной запуск в любое время
   push:
     branches:
       - main
@@ -42,7 +42,7 @@ jobs:
           rm -f xray.zip
           xray version
 
-      - name: Run VPN Checker & Google Ping Test
+      - name: Run VPN Checker & Speed Benchmark
         run: |
           python checker.py
 
@@ -54,6 +54,6 @@ jobs:
           if git diff --staged --quiet; then
             echo "Нет изменений в списке серверов."
           else
-            git commit -m "Автообновление подписки 'Наши белые' (МТС + Скорость) [skip ci]"
+            git commit -m "Автообновление подписки 'Наши белые' (ТОП скорости МТС) [skip ci]"
             git push
           fi
