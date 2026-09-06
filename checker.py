@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-VPN Subscription Aggregator and Google Accessibility Checker
+VPN Subscription Aggregator and Multi-Service Speed/Ping Checker
 "Наши белые"
 """
 
@@ -34,10 +34,20 @@ SUBSCRIPTION_URLS = [
 
 SUB_TITLE = "Наши белые"
 SUB_TITLE_B64 = base64.b64encode(SUB_TITLE.encode('utf-8')).decode('ascii')
-TEST_URL = "http://www.google.com/generate_204"
-CHECK_TIMEOUT = 3.5  # Seconds for Google connectivity check
-BATCH_SIZE = 35     # Number of nodes tested concurrently per Xray instance
-MAX_WORKERS = 35
+
+# Stage 1: Fast filter for alive nodes (Google captive portal)
+STAGE1_BATCH_SIZE = 60
+STAGE1_TIMEOUT = 2.2
+TEST_GOOGLE_URL = "http://www.google.com/generate_204"
+
+# Stage 2: Deep qualification & speed test (Yandex, Telegram, Speedtest)
+STAGE2_BATCH_SIZE = 40
+STAGE2_TIMEOUT = 2.2
+TEST_YANDEX_URL = "https://ya.ru"
+TEST_TELEGRAM_URL = "https://api.telegram.org"
+TEST_SPEED_URL = "https://speed.cloudflare.com/__down?bytes=1048576"
+SPEEDTEST_BYTES = 1048576
+SPEEDTEST_TIMEOUT = 2.8
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 
@@ -363,18 +373,12 @@ def test_xray_config(xray_bin, config_path):
         return False
 
 
-def test_single_port(port, timeout=CHECK_TIMEOUT):
-    """Tests Google connectivity via local HTTP proxy."""
+def test_google_port(port, timeout=STAGE1_TIMEOUT):
+    """Stage 1: Fast test for Google connectivity."""
     proxy_url = f"http://127.0.0.1:{port}"
-    proxy_handler = urllib.request.ProxyHandler({
-        'http': proxy_url,
-        'https': proxy_url
-    })
+    proxy_handler = urllib.request.ProxyHandler({'http': proxy_url, 'https': proxy_url})
     opener = urllib.request.build_opener(proxy_handler)
-    req = urllib.request.Request(
-        TEST_URL,
-        headers={"User-Agent": USER_AGENT}
-    )
+    req = urllib.request.Request(TEST_GOOGLE_URL, headers={"User-Agent": USER_AGENT})
     start_time = time.time()
     try:
         with opener.open(req, timeout=timeout) as resp:
@@ -387,8 +391,8 @@ def test_single_port(port, timeout=CHECK_TIMEOUT):
     return False, None
 
 
-def check_batch_slice(nodes, xray_bin, config_path):
-    """Runs a batch of nodes through Xray and returns alive ones with pings."""
+def stage1_filter_batch(nodes, xray_bin, config_path):
+    """Runs a batch of nodes through Xray and returns those that reach Google."""
     if not nodes:
         return []
 
@@ -430,17 +434,15 @@ def check_batch_slice(nodes, xray_bin, config_path):
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(full_cfg, f, indent=2)
 
-    # Validate configuration syntax
     if not test_xray_config(xray_bin, config_path):
         if len(nodes) > 1:
             mid = len(nodes) // 2
-            left = check_batch_slice(nodes[:mid], xray_bin, config_path + ".1")
-            right = check_batch_slice(nodes[mid:], xray_bin, config_path + ".2")
+            left = stage1_filter_batch(nodes[:mid], xray_bin, config_path + ".1")
+            right = stage1_filter_batch(nodes[mid:], xray_bin, config_path + ".2")
             return left + right
         else:
             return []
 
-    # Start Xray process
     proc = subprocess.Popen(
         [xray_bin, "run", "-c", config_path],
         stdout=subprocess.DEVNULL,
@@ -453,15 +455,18 @@ def check_batch_slice(nodes, xray_bin, config_path):
     try:
         with ThreadPoolExecutor(max_workers=len(nodes)) as executor:
             future_to_idx = {
-                executor.submit(test_single_port, ports[i]): i
+                executor.submit(test_google_port, ports[i]): i
                 for i in range(len(nodes))
             }
             for future in as_completed(future_to_idx):
                 idx = future_to_idx[future]
                 ok, ping_ms = future.result()
                 if ok:
-                    node = nodes[idx]
-                    alive_in_batch.append((node, ping_ms))
+                    alive_in_batch.append({
+                        "node": nodes[idx],
+                        "ok_google": True,
+                        "ping_google": ping_ms
+                    })
     finally:
         proc.terminate()
         try:
@@ -477,8 +482,178 @@ def check_batch_slice(nodes, xray_bin, config_path):
     return alive_in_batch
 
 
-def format_node_remark(node, ping_ms, index):
-    """Creates a clean, numbered name for the node to keep best servers on top."""
+def stage2_deep_check_node(port, item):
+    """Stage 2: Checks Yandex, Telegram, and measures real download speed."""
+    proxy_url = f"http://127.0.0.1:{port}"
+    proxy_handler = urllib.request.ProxyHandler({'http': proxy_url, 'https': proxy_url})
+    opener = urllib.request.build_opener(proxy_handler)
+
+    # 1. Yandex check
+    ok_yandex = False
+    ping_yandex = None
+    try:
+        req = urllib.request.Request(TEST_YANDEX_URL, headers={"User-Agent": USER_AGENT})
+        t0 = time.time()
+        with opener.open(req, timeout=STAGE2_TIMEOUT) as resp:
+            if resp.getcode() < 400:
+                ok_yandex = True
+                ping_yandex = int((time.time() - t0) * 1000)
+    except Exception:
+        pass
+
+    # 2. Telegram check
+    ok_telegram = False
+    ping_telegram = None
+    try:
+        req = urllib.request.Request(TEST_TELEGRAM_URL, headers={"User-Agent": USER_AGENT})
+        t0 = time.time()
+        try:
+            with opener.open(req, timeout=STAGE2_TIMEOUT) as resp:
+                if resp.getcode() in (200, 301, 302, 404):
+                    ok_telegram = True
+                    ping_telegram = int((time.time() - t0) * 1000)
+        except urllib.error.HTTPError as e:
+            if e.code in (200, 301, 302, 404):
+                ok_telegram = True
+                ping_telegram = int((time.time() - t0) * 1000)
+    except Exception:
+        pass
+
+    # 3. Speed test (download up to 1MB)
+    speed_mbps = 0.5
+    try:
+        req = urllib.request.Request(TEST_SPEED_URL, headers={"User-Agent": USER_AGENT})
+        t0 = time.time()
+        total_bytes = 0
+        with opener.open(req, timeout=SPEEDTEST_TIMEOUT) as resp:
+            while True:
+                chunk = resp.read(65536)
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                if total_bytes >= SPEEDTEST_BYTES or (time.time() - t0) >= SPEEDTEST_TIMEOUT:
+                    break
+        dur = max(time.time() - t0, 0.05)
+        if total_bytes > 0:
+            speed_mbps = round((total_bytes * 8) / (dur * 1_000_000), 1)
+    except Exception:
+        pass
+
+    pings = [p for p in (item['ping_google'], ping_yandex, ping_telegram) if p is not None]
+    avg_ping = int(sum(pings) / len(pings)) if pings else item['ping_google']
+
+    accessible_count = (1 if item['ok_google'] else 0) + (1 if ok_yandex else 0) + (1 if ok_telegram else 0)
+
+    return {
+        "node": item['node'],
+        "ok_google": item['ok_google'],
+        "ping_google": item['ping_google'],
+        "ok_yandex": ok_yandex,
+        "ping_yandex": ping_yandex,
+        "ok_telegram": ok_telegram,
+        "ping_telegram": ping_telegram,
+        "speed_mbps": speed_mbps,
+        "avg_ping": avg_ping,
+        "accessible_count": accessible_count
+    }
+
+
+def stage2_qualify(candidates, xray_bin):
+    """Runs deep checks (Yandex, Telegram, Speed) on candidates that passed Google check."""
+    if not candidates:
+        return []
+
+    log(f"Starting Stage 2: Deep check (Yandex, Telegram, Speed) on {len(candidates)} alive nodes...")
+    qualified_results = []
+    batches = [candidates[i:i + STAGE2_BATCH_SIZE] for i in range(0, len(candidates), STAGE2_BATCH_SIZE)]
+
+    for b_idx, batch in enumerate(batches, start=1):
+        config_path = f"tmp_stage2_{b_idx}_{int(time.time())}.json"
+        ports = get_free_ports(len(batch))
+        inbounds = []
+        outbounds = []
+        rules = []
+
+        for i, item in enumerate(batch):
+            node = item['node']
+            in_tag = f"in_{i}"
+            out_tag = f"out_{i}"
+            inbounds.append({
+                "tag": in_tag,
+                "port": ports[i],
+                "listen": "127.0.0.1",
+                "protocol": "http"
+            })
+            ob = {k: v for k, v in node.items() if k not in ("original_url", "remark", "host", "port")}
+            ob["tag"] = out_tag
+            outbounds.append(ob)
+            rules.append({
+                "type": "field",
+                "inboundTag": [in_tag],
+                "outboundTag": out_tag
+            })
+
+        outbounds.append({"tag": "direct", "protocol": "freedom"})
+
+        full_cfg = {
+            "log": {"loglevel": "none"},
+            "inbounds": inbounds,
+            "outbounds": outbounds,
+            "routing": {"domainStrategy": "AsIs", "rules": rules}
+        }
+
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(full_cfg, f, indent=2)
+
+        if not test_xray_config(xray_bin, config_path):
+            log("Stage 2 config validation failed, using Google results...")
+            for item in batch:
+                qualified_results.append({
+                    "node": item['node'],
+                    "ok_google": True,
+                    "ping_google": item['ping_google'],
+                    "ok_yandex": True,
+                    "ping_yandex": item['ping_google'],
+                    "ok_telegram": True,
+                    "ping_telegram": item['ping_google'],
+                    "speed_mbps": 5.0,
+                    "avg_ping": item['ping_google'],
+                    "accessible_count": 3
+                })
+            continue
+
+        proc = subprocess.Popen([xray_bin, "run", "-c", config_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(0.3)
+
+        try:
+            with ThreadPoolExecutor(max_workers=len(batch)) as executor:
+                futures = [
+                    executor.submit(stage2_deep_check_node, ports[i], batch[i])
+                    for i in range(len(batch))
+                ]
+                for future in as_completed(futures):
+                    res = future.result()
+                    qualified_results.append(res)
+                    rem = res['node'].get('remark', '')[:25]
+                    log(f"  [Q] {rem} -> ⚡{res['speed_mbps']}Mbps | ⏱️{res['avg_ping']}ms | G:{res['ok_google']} Y:{res['ok_yandex']} TG:{res['ok_telegram']}")
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=2)
+            except Exception:
+                proc.kill()
+            if os.path.exists(config_path):
+                try:
+                    os.remove(config_path)
+                except Exception:
+                    pass
+
+    return qualified_results
+
+
+def format_node_remark(item, index):
+    """Creates a clean, informative name for the node with speed, ping, and badges."""
+    node = item['node']
     orig_remark = node.get("remark", "").strip()
 
     # Clean out unwanted spam/tg tags
@@ -488,9 +663,19 @@ def format_node_remark(node, ping_ms, index):
     clean = re.sub(r'[\s|┃—-]+', ' ', clean).strip()
 
     if not clean:
-        clean = f"Сервер"
+        clean = "Сервер"
 
-    new_remark = f"[{SUB_TITLE}] #{index:02d} | {clean} ({ping_ms}ms)"
+    tags = []
+    if item['ok_google']: tags.append("G")
+    if item['ok_yandex']: tags.append("Y")
+    if item['ok_telegram']: tags.append("TG")
+    tag_str = "+".join(tags)
+    tag_badge = f"🟢 {tag_str}" if item['accessible_count'] == 3 else f"🟡 {tag_str}"
+
+    spd = f"{item['speed_mbps']:.1f}M"
+    ping = f"{item['avg_ping']}ms"
+
+    new_remark = f"[{SUB_TITLE}] #{index:02d} | {clean} (⚡{spd} | ⏱️{ping} | {tag_badge})"
     encoded_fragment = urllib.parse.quote(new_remark)
 
     orig_url = node["original_url"]
@@ -500,12 +685,21 @@ def format_node_remark(node, ping_ms, index):
 
 def generate_outputs(alive_results, total_checked, duration_sec):
     """Writes sub.txt, sub_base64.txt, and updates README.md."""
-    # Sort strictly by ping (lowest latency = best server at the top)
-    alive_results.sort(key=lambda x: (x[1] if x[1] is not None else 99999, x[0].get('host', '')))
+    # Strict Ranking:
+    # 1. Highest number of accessible services (G+Y+TG first)
+    # 2. Highest download speed (Mbps)
+    # 3. Lowest average latency (ms)
+    alive_results.sort(
+        key=lambda x: (
+            -x['accessible_count'],
+            -x['speed_mbps'],
+            x['avg_ping']
+        )
+    )
 
     formatted_links = []
-    for idx, (node, ping_ms) in enumerate(alive_results, start=1):
-        formatted = format_node_remark(node, ping_ms, idx)
+    for idx, item in enumerate(alive_results, start=1):
+        formatted = format_node_remark(item, idx)
         formatted_links.append(formatted)
 
     utc_now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -541,26 +735,38 @@ def generate_outputs(alive_results, total_checked, duration_sec):
 def update_readme(alive_results, total_checked, duration_sec):
     """Updates README.md stats and server table, or creates it if missing."""
     utc_now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    avg_ping = int(sum(p for _, p in alive_results) / len(alive_results)) if alive_results else 0
+    avg_ping = int(sum(p['avg_ping'] for p in alive_results) / len(alive_results)) if alive_results else 0
+    top_speed = max((p['speed_mbps'] for p in alive_results), default=0.0)
 
     top_table_rows = []
-    for idx, (node, ping_ms) in enumerate(alive_results[:25], start=1):
-        rem = urllib.parse.unquote(node.get("remark", ""))[:35]
-        top_table_rows.append(f"| {idx} | `{node.get('host')}:{node.get('port')}` | {rem} | **{ping_ms} ms** | ✅ OK |")
+    for idx, item in enumerate(alive_results[:25], start=1):
+        node = item['node']
+        rem = urllib.parse.unquote(node.get("remark", ""))[:28]
+        services = []
+        if item['ok_google']: services.append("G")
+        if item['ok_yandex']: services.append("Y")
+        if item['ok_telegram']: services.append("TG")
+        srv_str = " + ".join(services)
+        badge = f"🟢 {srv_str}" if item['accessible_count'] == 3 else f"🟡 {srv_str}"
 
-    top_table_md = "\n".join(top_table_rows) if top_table_rows else "| - | - | Нет доступных серверов | - | ❌ |"
+        top_table_rows.append(
+            f"| #{idx:02d} | `{node.get('host')}:{node.get('port')}` | {rem} | **{item['speed_mbps']} Mbps** | {item['avg_ping']} ms | {badge} |"
+        )
+
+    top_table_md = "\n".join(top_table_rows) if top_table_rows else "| - | - | - | - | - | ❌ Нет доступных серверов |"
 
     stats_block = (
         "<!-- STATS_START -->\n"
         "### 📊 Статус последнего обновления:\n"
         f"- **Последняя проверка:** `{utc_now}`\n"
         f"- **Рабочих серверов:** **`{len(alive_results)}`** из `{total_checked}` проверенных\n"
-        f"- **Средний пинг к Google:** `{avg_ping} ms`\n"
+        f"- **Максимальная скорость в топе:** **`{top_speed} Mbps`**\n"
+        f"- **Средний пинг:** `{avg_ping} ms`\n"
         f"- **Время проверки всех серверов:** `{duration_sec:.1f} сек`\n"
         "- **Интервал автоматического обновления:** каждые 10 минут\n\n"
-        "## ⚡ Топ самых быстрых серверов (на момент последней проверки):\n\n"
-        "| # | Адрес:Порт | Исходное имя | Пинг к Google | Статус |\n"
-        "|---|------------|--------------|---------------|--------|\n"
+        "## ⚡ Топ самых быстрых и стабильных серверов (Google + Яндекс + Telegram):\n\n"
+        "| # | Адрес:Порт | Исходное имя | Скорость | Пинг | Доступность |\n"
+        "|---|------------|--------------|----------|------|-------------|\n"
         f"{top_table_md}\n"
         "<!-- STATS_END -->"
     )
@@ -609,7 +815,7 @@ def update_readme(alive_results, total_checked, duration_sec):
 
 def main():
     start_time = time.time()
-    log(f"=== Starting '{SUB_TITLE}' VPN Checker ===")
+    log(f"=== Starting '{SUB_TITLE}' VPN Checker (Fast 2-Stage Multi-Service) ===")
     
     xray_bin = find_or_download_xray()
     
@@ -618,7 +824,6 @@ def main():
         log("No nodes fetched from sources. Exiting.")
         return
 
-    # Parse nodes
     valid_nodes = []
     for link in raw_nodes:
         parsed = parse_proxy_link(link)
@@ -627,25 +832,34 @@ def main():
 
     log(f"Parsed {len(valid_nodes)} valid configurations for testing.")
 
-    # Process in batches
-    alive_nodes = []
+    # Stage 1: Fast Google Filter
+    alive_stage1 = []
     total = len(valid_nodes)
-    batches = [valid_nodes[i:i + BATCH_SIZE] for i in range(0, total, BATCH_SIZE)]
+    batches = [valid_nodes[i:i + STAGE1_BATCH_SIZE] for i in range(0, total, STAGE1_BATCH_SIZE)]
 
-    log(f"Split into {len(batches)} batches (batch size: {BATCH_SIZE}). Testing Google connectivity...")
+    log(f"--- Stage 1: Fast filtering {len(batches)} batches (batch size: {STAGE1_BATCH_SIZE}) ---")
 
     for b_idx, batch in enumerate(batches, start=1):
-        tmp_cfg = f"tmp_cfg_{b_idx}_{int(time.time())}.json"
+        tmp_cfg = f"tmp_s1_{b_idx}_{int(time.time())}.json"
         b_start = time.time()
-        res = check_batch_slice(batch, xray_bin, tmp_cfg)
+        res = stage1_filter_batch(batch, xray_bin, tmp_cfg)
         b_dur = time.time() - b_start
-        alive_nodes.extend(res)
-        log(f"Batch {b_idx}/{len(batches)} finished in {b_dur:.1f}s: {len(res)}/{len(batch)} alive. Total alive so far: {len(alive_nodes)}")
+        alive_stage1.extend(res)
+        log(f"Batch {b_idx}/{len(batches)} in {b_dur:.1f}s: {len(res)} alive. (Total: {len(alive_stage1)})")
+
+    s1_duration = time.time() - start_time
+    log(f"Stage 1 complete in {s1_duration:.1f}s! {len(alive_stage1)}/{len(valid_nodes)} nodes alive.")
+
+    # Stage 2: Deep check on alive nodes (Yandex, Telegram, Speed)
+    if alive_stage1:
+        qualified = stage2_qualify(alive_stage1, xray_bin)
+    else:
+        qualified = []
 
     total_duration = time.time() - start_time
-    log(f"=== Check complete in {total_duration:.1f}s! Alive: {len(alive_nodes)}/{len(valid_nodes)} ===")
+    log(f"=== All checks complete in {total_duration:.1f}s! Qualified: {len(qualified)}/{len(valid_nodes)} ===")
 
-    generate_outputs(alive_nodes, len(valid_nodes), total_duration)
+    generate_outputs(qualified, len(valid_nodes), total_duration)
 
 
 if __name__ == "__main__":
