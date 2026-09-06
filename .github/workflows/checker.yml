@@ -1,0 +1,60 @@
+name: Update 'Наши белые' VPN Subscription
+
+on:
+  schedule:
+    # Запуск каждые 30 минут
+    - cron: '*/30 * * * *'
+  workflow_dispatch: # Кнопка ручного запуска в интерфейсе GitHub
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'sub.txt'
+      - 'sub_base64.txt'
+      - 'README.md'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: vpn-checker
+  cancel-in-progress: true
+
+jobs:
+  check-and-update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Xray-core
+        run: |
+          XRAY_VER="v25.1.30"
+          curl -sL "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VER}/Xray-linux-64.zip" -o xray.zip
+          unzip -q xray.zip xray
+          chmod +x xray
+          sudo mv xray /usr/local/bin/xray
+          rm -f xray.zip
+          xray version
+
+      - name: Run VPN Checker & Google Ping Test
+        run: |
+          python checker.py
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add sub.txt sub_base64.txt README.md
+          if git diff --staged --quiet; then
+            echo "Нет изменений в списке серверов."
+          else
+            git commit -m "Автообновление подписки 'Наши белые' [skip ci]"
+            git push
+          fi
