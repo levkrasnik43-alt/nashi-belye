@@ -2,9 +2,9 @@ name: Update 'Наши белые' VPN Subscription
 
 on:
   schedule:
-    # Запуск каждые 30 минут
-    - cron: '*/30 * * * *'
-  workflow_dispatch: # Кнопка ручного запуска в интерфейсе GitHub
+    # Запуск каждые 10 минут
+    - cron: '*/10 * * * *'
+  workflow_dispatch: # Кнопка для ручного запуска в любое время
   push:
     branches:
       - main
