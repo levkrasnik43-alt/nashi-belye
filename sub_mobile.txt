@@ -2,10 +2,8 @@
 #profile-title: base64:0J3QsNGI0Lgg0LHQtdC70YvQtSBb0JzQotChINCc0L7QsdCw0LnQuyDimqEg0KHQutC+0YDQvtGB0YLRjF0=
 #profile-update-interval: 1
 #subscription-userinfo: upload=0; download=0; total=107374182400; expire=0
-#last-update: 2026-10-14 05:57:49 UTC
-#mobile-servers-count: 3
+#last-update: 2026-10-14 11:40:51 UTC
+#mobile-servers-count: 1
 #note: 100% Mobile Ready (Port 443 + RU Whitelist SNI + Reality Vision for MTS/MegaFon/Beeline/Tele2)
 
-vless://5aefad36-749b-401c-8b3b-547ef7d2253e@45.131.212.151:443?encryption=none&flow=xtls-rprx-vision&fp=random&pbk=e0RV9wRJdsQbQ0ugn5QUhJcTgWsSTVsKQTXMKweMDUg&security=reality&sni=de.lstu.ru&type=raw#%5B%D0%9D%D0%B0%D1%88%D0%B8%20%D0%B1%D0%B5%D0%BB%D1%8B%D0%B5%5D%20%2301%20%7C%20%E2%9A%A1%208.6%20Mbps%20%7C%20%F0%9F%93%B1%D0%9C%D0%A2%D0%A1%20%7C%20%F0%9F%87%A9%F0%9F%87%AA%20Germany%20%2368%20%28%E2%8F%B1%EF%B8%8F341ms%29
-vless://4330a14e-455d-4b89-82d1-179efb3d0a32@46.182.24.240:443?encryption=none&fp=random&mode=gun&pbk=Ed29G1bO6isJRo8iGPm7W_9c4mVFqHUilPmDP0llJW8&security=reality&serviceName=grpc-32d2699be001e4f1&sni=max.ru&type=grpc#%5B%D0%9D%D0%B0%D1%88%D0%B8%20%D0%B1%D0%B5%D0%BB%D1%8B%D0%B5%5D%20%2302%20%7C%20%E2%9A%A1%200.5%20Mbps%20%7C%20%F0%9F%93%B1%D0%9C%D0%A2%D0%A1%20%7C%20%F0%9F%87%B3%F0%9F%87%B1%20The%20Netherlands%20%2391%20%28%E2%8F%B1%EF%B8%8F656ms%29
-vless://7832b450-d561-45d6-b425-8527fa8babe0@185.86.145.142:443?encryption=none&security=tls&sni=n2.185-86-145-142.sslip.io&fp=random&type=ws&path=%2Fe7ws&host=n2.185-86-145-142.sslip.io#%5B%D0%9D%D0%B0%D1%88%D0%B8%20%D0%B1%D0%B5%D0%BB%D1%8B%D0%B5%5D%20%2303%20%7C%20%E2%9A%A1%200.5%20Mbps%20%7C%20%F0%9F%93%B1%D0%9C%D0%A2%D0%A1%20%7C%20%F0%9F%87%A9%F0%9F%87%AA%20Germany%20%5B%2ACIDR%5D%20VK%20%28%E2%8F%B1%EF%B8%8F1221ms%29
+vless://adc11f30-e4cb-4985-bf5e-f9ded69c019f@90.156.218.163:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=eh.vk.ru&pbk=fNfokzklCF4l_c8k8PciOCjm5ecNoF_sNLjEtaO-xzI&sid=db04ce8bdb8900f1&type=tcp&headerType=none&host=%3FTELEGRAM--MARAMBASHI--MARAMBASHI&fp=chrome#%5B%D0%9D%D0%B0%D1%88%D0%B8%20%D0%B1%D0%B5%D0%BB%D1%8B%D0%B5%5D%20%2301%20%7C%20%E2%9A%A1%200.5%20Mbps%20%7C%20%F0%9F%93%B1%D0%9C%D0%A2%D0%A1%20%7C%20%F0%9F%87%B5%F0%9F%87%B1%20Poland%20%5B%2ACIDR%5D%20VK%20%28%E2%8F%B1%EF%B8%8F1856ms%29
