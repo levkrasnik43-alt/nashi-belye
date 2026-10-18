@@ -2,10 +2,8 @@
 #profile-title: base64:0J3QsNGI0Lgg0LHQtdC70YvQtSBb0JzQotChINCc0L7QsdCw0LnQuyDimqEg0KHQutC+0YDQvtGB0YLRjF0=
 #profile-update-interval: 1
 #subscription-userinfo: upload=0; download=0; total=107374182400; expire=0
-#last-update: 2026-10-18 16:46:08 UTC
-#mobile-servers-count: 3
+#last-update: 2026-10-18 19:20:40 UTC
+#mobile-servers-count: 1
 #note: 100% Mobile Ready (Port 443 + RU Whitelist SNI + Reality Vision for MTS/MegaFon/Beeline/Tele2)
 
-vless://01113702-2775-41e4-9aab-1277c5c4fc93@rus.fortfun.fun:443?encryption=none&flow=xtls-rprx-vision&security=tls&type=tcp&fp=safari#%5B%D0%9D%D0%B0%D1%88%D0%B8%20%D0%B1%D0%B5%D0%BB%D1%8B%D0%B5%5D%20%2301%20%7C%20%E2%9A%A1%201.4%20Mbps%20%7C%20%F0%9F%93%B1%D0%9C%D0%A2%D0%A1%20%7C%20%F0%9F%87%B7%F0%9F%87%BA%20Russia%20%5B%2ACIDR%5D%20%28%E2%8F%B1%EF%B8%8F964ms%29
-vless://01113702-2775-41e4-9aab-1277c5c4fc93@rus.fortfun.fun:443?encryption=none&flow=xtls-rprx-vision&security=tls&type=tcp&fp=chrome#%5B%D0%9D%D0%B0%D1%88%D0%B8%20%D0%B1%D0%B5%D0%BB%D1%8B%D0%B5%5D%20%2302%20%7C%20%E2%9A%A1%200.5%20Mbps%20%7C%20%F0%9F%93%B1%D0%9C%D0%A2%D0%A1%20%7C%20%F0%9F%87%B7%F0%9F%87%BA%20Russia%20%5B%2ACIDR%5D%20%28%E2%8F%B1%EF%B8%8F1617ms%29
-vless://01113702-2775-41e4-9aab-1277c5c4fc93@rus.fortfun.fun:443?encryption=none&flow=xtls-rprx-vision&security=tls&type=tcp&fp=ios#%5B%D0%9D%D0%B0%D1%88%D0%B8%20%D0%B1%D0%B5%D0%BB%D1%8B%D0%B5%5D%20%2303%20%7C%20%E2%9A%A1%200.5%20Mbps%20%7C%20%F0%9F%93%B1%D0%9C%D0%A2%D0%A1%20%7C%20%F0%9F%87%B7%F0%9F%87%BA%20Russia%20%5B%2ACIDR%5D%20%28%E2%8F%B1%EF%B8%8F1668ms%29
+vless://9cb8d71c-fe06-4402-a591-eaa1f173b890@45.91.55.86:443?encryption=none&security=tls&serviceName=northfeed&sni=stillroom.10media.top&type=grpc&fp=chrome#%5B%D0%9D%D0%B0%D1%88%D0%B8%20%D0%B1%D0%B5%D0%BB%D1%8B%D0%B5%5D%20%2301%20%7C%20%E2%9A%A1%200.5%20Mbps%20%7C%20%F0%9F%93%B1%D0%9C%D0%A2%D0%A1%20%7C%20%F0%9F%87%B3%F0%9F%87%B1%20The%20Netherlands%20%5B%2ACIDR%5D%20%28%E2%8F%B1%EF%B8%8F1855ms%29
